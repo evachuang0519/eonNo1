@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<style>
+.order-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;}
+.order-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;transition:box-shadow .2s;}
+.order-card:hover{box-shadow:0 4px 16px rgba(0,0,0,.08);}
+.order-card-head{padding:12px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);gap:8px;}
+.order-card-time{font-size:18px;font-weight:800;color:var(--primary);white-space:nowrap;}
+.order-card-name{font-size:14px;font-weight:700;flex:1;margin:0 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.order-card-body{padding:14px 16px;display:flex;flex-direction:column;gap:8px;}
+.order-row{display:flex;align-items:flex-start;gap:8px;font-size:12px;}
+.order-row .material-icons{font-size:15px;color:var(--muted);margin-top:1px;flex-shrink:0;}
+.order-row-val{color:var(--text);line-height:1.4;}
+.order-card-foot{padding:10px 16px;border-top:1px solid var(--border);display:flex;gap:6px;flex-wrap:wrap;}
+.act-btn{flex:1;min-width:70px;padding:7px 10px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:4px;transition:opacity .15s;}
+.act-btn:hover{opacity:.85;}
+.act-btn:disabled{opacity:.45;cursor:not-allowed;}
+.btn-pickup{background:#dcfce7;color:#166534;}
+.btn-dropoff{background:#dbeafe;color:#1e40af;}
+.btn-leave{background:#fef3c7;color:#92400e;}
+.btn-maps{background:#f1f5f9;color:#475569;}
+.filter-bar{display:flex;align-items:center;gap:10px;margin-bottom:20px;flex-wrap:wrap;}
+.filter-bar select{border:1px solid var(--border);border-radius:var(--r);padding:6px 10px;font-size:13px;background:var(--card);color:var(--text);outline:none;}
+.filter-bar select:focus{border-color:var(--primary);}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-title">
+  <span class="material-icons">today</span>今日班表
+  <span style="font-size:14px;font-weight:400;color:var(--muted);margin-left:4px;" id="today-title-date"></span>
+</div>
+
+<div class="filter-bar">
+  <div class="search-box" style="max-width:260px;">
+    <span class="material-icons">search</span>
+    <input type="text" id="search-input" placeholder="搜尋乘客、地址…" oninput="filterCards()">
+  </div>
+  <select id="filter-status" onchange="filterCards()">
+    <option value="">全部狀態</option>
+    <option>待接送</option>
+    <option>已接送</option>
+    <option>客上</option>
+    <option>客下</option>
+    <option>請假</option>
+    <option>取消</option>
+  </select>
+  <select id="filter-driver" onchange="filterCards()">
+    <option value="">全部司機</option>
+  </select>
+  <button class="btn btn-ghost" onclick="loadToday()">
+    <span class="material-icons" style="font-size:15px">refresh</span>重新整理
+  </button>
+  <span id="card-count" style="font-size:12px;color:var(--muted);margin-left:auto;"></span>
+</div>
+
+<div class="order-grid" id="order-grid"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let _orders = {{ orders | tojson }};
+
+document.getElementById('today-title-date').textContent =
+  new Date().toLocaleDateString('zh-TW', {year:'numeric',month:'long',day:'numeric',weekday:'long'});
+
+// ── GPS action helpers ────────────────────────────────────────────────────────
+
+async function _postAction(endpoint, key, lat, lng) {
+  const body = { key };
+  if (lat != null) { body.lat = lat; body.lng = lng; }
+  const r = await fetch(`${API}${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  return r;
+}
+
+async function doPickup(key) {
+  const btn = document.querySelector(`[data-action-pickup="${key}"]`);
+  if (btn) btn.disabled = true;
+  const _done = async (lat, lng) => {
+    const r = await _postAction('/api/action/pickup', key, lat, lng);
+    if (r.ok) { toast(lat ? '已記錄客上（含GPS）' : '已記錄客上（無GPS）', 'ok'); loadToday(); }
+    else { const e = await r.json().catch(()=>({})); toast(e.error || '操作失敗', 'err'); }
+    if (btn) btn.disabled = false;
+  };
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      pos => _done(pos.coords.latitude, pos.coords.longitude),
+      ()   => _done(null, null),
+      { timeout: 6000 }
+    );
+  } else {
+    await _done(null, null);
+  }
+}
+
+async function doDropoff(key) {
+  const btn = document.querySelector(`[data-action-dropoff="${key}"]`);
+  if (btn) btn.disabled = true;
+  const _done = async (lat, lng) => {
+    const r = await _postAction('/api/action/dropoff', key, lat, lng);
+    if (r.ok) { toast(lat ? '已記錄客下（含GPS）' : '已記錄客下（無GPS）', 'ok'); loadToday(); }
+    else { const e = await r.json().catch(()=>({})); toast(e.error || '操作失敗', 'err'); }
+    if (btn) btn.disabled = false;
+  };
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      pos => _done(pos.coords.latitude, pos.coords.longitude),
+      ()   => _done(null, null),
+      { timeout: 6000 }
+    );
+  } else {
+    await _done(null, null);
+  }
+}
+
+async function doLeave(key) {
+  if (!confirm('確認登記請假？')) return;
+  const r = await _postAction('/api/action/leave', key, null, null);
+  if (r.ok) { toast('已登記請假', 'ok'); loadToday(); }
+  else { const e = await r.json().catch(()=>({})); toast(e.error || '操作失敗', 'err'); }
+}
+
+// ── Data loading ──────────────────────────────────────────────────────────────
+
+async function loadToday() {
+  try {
+    const r = await fetch(`${API}/api/schedule/today`);
+    if (!r.ok) throw new Error();
+    _orders = await r.json();
+    _populateDriverFilter(_orders);
+    filterCards();
+  } catch(_) {
+    toast('載入今日班表失敗', 'err');
+  }
+}
+
+function onSyncComplete() { loadToday(); }
+
+// ── Filter & render ───────────────────────────────────────────────────────────
+
+function _populateDriverFilter(orders) {
+  const sel = document.getElementById('filter-driver');
+  const cur = sel.value;
+  const drivers = [...new Set(orders.map(o => o['服務司機'] || o['driver'] || '').filter(Boolean))].sort();
+  sel.innerHTML = '<option value="">全部司機</option>' +
+    drivers.map(d => `<option ${d===cur?'selected':''}>${esc(d)}</option>`).join('');
+}
+
+function filterCards() {
+  const q = (document.getElementById('search-input').value || '').toLowerCase();
+  const st = document.getElementById('filter-status').value;
+  const dr = document.getElementById('filter-driver').value;
+
+  const filtered = _orders.filter(o => {
+    const text = JSON.stringify(o).toLowerCase();
+    if (q && !text.includes(q)) return false;
+    if (st && (o['訂單狀態'] || o['status'] || '') !== st) return false;
+    if (dr && (o['服務司機'] || o['driver'] || '') !== dr) return false;
+    return true;
+  });
+
+  renderCards(filtered);
+}
+
+function renderCards(orders) {
+  const grid = document.getElementById('order-grid');
+  const countEl = document.getElementById('card-count');
+
+  if (!orders || orders.length === 0) {
+    grid.innerHTML = `<div class="empty" style="grid-column:1/-1;">
+      <span class="material-icons">event_busy</span>今日無班表資料
+    </div>`;
+    if (countEl) countEl.textContent = '';
+    return;
+  }
+
+  if (countEl) countEl.textContent = `共 ${orders.length} 筆`;
+
+  grid.innerHTML = orders.map(o => {
+    const key     = o['_key'] || o['id'] || o['訂單編號'] || '';
+    const time    = o['搭乘時間'] || o['time'] || '';
+    const name    = o['乘客姓名'] || o['name'] || '';
+    const status  = o['訂單狀態'] || o['status'] || '';
+    const route   = o['路線'] || o['route'] || '';
+    const center  = o['日照中心'] || o['center'] || '';
+    const addr    = o['上車地址'] || o['address'] || '';
+    const driver  = o['服務司機'] || o['driver'] || '';
+    const phone   = o['電話'] || o['phone'] || '';
+    const pickLat = o['客上緯度'] || o['pickup_lat'] || '';
+    const dropLat = o['客下緯度'] || o['dropoff_lat'] || '';
+
+    const mapsUrl = addr
+      ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`
+      : '';
+
+    const isDone = ['客下','完成','已完成'].includes(status);
+    const isLeave = ['請假','取消'].includes(status);
+    const hasPickup = !!pickLat || status === '客上';
+    const hasDropoff = !!dropLat || isDone;
+
+    return `<div class="order-card">
+      <div class="order-card-head">
+        <div class="order-card-time">${esc(time)}</div>
+        <div class="order-card-name">${esc(name)}</div>
+        ${statusBadge(status)}
+      </div>
+      <div class="order-card-body">
+        ${route ? `<div class="order-row"><span class="material-icons">route</span><div class="order-row-val">${esc(route)}</div></div>` : ''}
+        ${center ? `<div class="order-row"><span class="material-icons">business</span><div class="order-row-val">${esc(center)}</div></div>` : ''}
+        ${addr ? `<div class="order-row"><span class="material-icons">place</span><div class="order-row-val">${esc(addr)}</div></div>` : ''}
+        ${driver ? `<div class="order-row"><span class="material-icons">person</span><div class="order-row-val">${esc(driver)}</div></div>` : ''}
+        ${phone ? `<div class="order-row"><span class="material-icons">phone</span><div class="order-row-val"><a href="tel:${esc(phone)}" style="color:var(--primary)">${esc(phone)}</a></div></div>` : ''}
+      </div>
+      <div class="order-card-foot">
+        ${!isLeave ? `
+          <button class="act-btn btn-pickup" data-action-pickup="${esc(key)}"
+            ${hasPickup ? 'disabled' : ''}
+            onclick="doPickup(${JSON.stringify(key)})">
+            <span class="material-icons" style="font-size:14px">arrow_upward</span>客上
+          </button>
+          <button class="act-btn btn-dropoff" data-action-dropoff="${esc(key)}"
+            ${!hasPickup || hasDropoff ? 'disabled' : ''}
+            onclick="doDropoff(${JSON.stringify(key)})">
+            <span class="material-icons" style="font-size:14px">arrow_downward</span>客下
+          </button>
+          <button class="act-btn btn-leave"
+            ${isLeave ? 'disabled' : ''}
+            onclick="doLeave(${JSON.stringify(key)})">
+            <span class="material-icons" style="font-size:14px">event_busy</span>請假
+          </button>
+        ` : `<span style="font-size:12px;color:var(--muted);padding:4px 0;">已${esc(status)}</span>`}
+        ${mapsUrl ? `
+          <a href="${mapsUrl}" target="_blank" rel="noopener" style="text-decoration:none;flex:1;min-width:70px;">
+            <button class="act-btn btn-maps" style="width:100%">
+              <span class="material-icons" style="font-size:14px">map</span>地圖
+            </button>
+          </a>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+_populateDriverFilter(_orders);
+filterCards();
+</script>
+{% endblock %}

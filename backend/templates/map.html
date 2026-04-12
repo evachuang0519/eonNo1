@@ -1,0 +1,272 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<style>
+#map-wrap{position:relative;flex:1;display:flex;flex-direction:column;min-height:500px;}
+#map{flex:1;min-height:500px;border-radius:var(--r);border:1px solid var(--border);}
+.map-filter{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
+  padding:14px 16px;margin-bottom:14px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;}
+.map-filter label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;
+  letter-spacing:.05em;display:block;margin-bottom:3px;}
+.map-filter input[type="date"],
+.map-filter select{border:1px solid var(--border);border-radius:6px;padding:6px 10px;
+  font-size:13px;background:var(--card);color:var(--text);outline:none;}
+.map-filter input:focus,.map-filter select:focus{border-color:var(--primary);}
+.map-legend{position:absolute;bottom:120px;right:10px;background:var(--card);
+  border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;
+  font-size:12px;z-index:5;box-shadow:0 2px 8px rgba(0,0,0,.1);}
+.map-legend-row{display:flex;align-items:center;gap:8px;margin-bottom:4px;}
+.map-legend-row:last-child{margin-bottom:0;}
+.legend-dot{width:12px;height:12px;border-radius:50%;flex-shrink:0;}
+#map-count{font-size:12px;color:var(--muted);margin-left:auto;align-self:center;}
+#main{display:flex;flex-direction:column;padding:24px;gap:0;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-title" style="margin-bottom:14px;">
+  <span class="material-icons">map</span>路線圖
+</div>
+
+<div class="map-filter">
+  <div>
+    <label>日期</label>
+    <input type="date" id="map-date">
+  </div>
+  <div>
+    <label>服務司機</label>
+    <select id="map-driver">
+      <option value="">全部司機</option>
+      {% for d in drivers %}
+      <option>{{ d }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button class="btn btn-primary" onclick="queryMap()">
+    <span class="material-icons" style="font-size:15px">search</span>查詢
+  </button>
+  <button class="btn btn-ghost" onclick="resetMap()">
+    <span class="material-icons" style="font-size:15px">refresh</span>重置
+  </button>
+  <span id="map-count"></span>
+</div>
+
+<div id="map-wrap">
+  <div id="map"></div>
+  <div class="map-legend">
+    <div class="map-legend-row">
+      <div class="legend-dot" style="background:#16a34a"></div>上車地點
+    </div>
+    <div class="map-legend-row">
+      <div class="legend-dot" style="background:#dc2626"></div>下車地點
+    </div>
+    <div class="map-legend-row">
+      <div style="width:20px;border-top:2px dashed #2563eb;"></div>接送路線
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let _mapData = {{ map_data | tojson }};
+let gmap = null;
+let _markers = [];
+let _lines   = [];
+let _infoWin = null;
+
+// ── Coord parser ──────────────────────────────────────────────────────────────
+function parseCoord(s) {
+  if (!s) return null;
+  const parts = String(s).split(',').map(x => parseFloat(x.trim()));
+  if (parts.length < 2 || isNaN(parts[0]) || isNaN(parts[1])) return null;
+  if (parts[0] < -90  || parts[0] > 90)  return null;
+  if (parts[1] < -180 || parts[1] > 180) return null;
+  return { lat: parts[0], lng: parts[1] };
+}
+
+// ── Google Maps init (called by API loader) ───────────────────────────────────
+function initMap() {
+  gmap = new google.maps.Map(document.getElementById('map'), {
+    center: { lat: 23.7, lng: 120.9 },
+    zoom: 9,
+    mapTypeControl: true,
+    streetViewControl: false,
+    fullscreenControl: true,
+  });
+  _infoWin = new google.maps.InfoWindow();
+
+  // Init with server-side data
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('map-date').value = today;
+  renderMap(_mapData);
+}
+
+// ── Clear map overlays ────────────────────────────────────────────────────────
+function clearMap() {
+  _markers.forEach(m => m.setMap(null));
+  _lines.forEach(l => l.setMap(null));
+  _markers = [];
+  _lines   = [];
+}
+
+// ── Render markers & polylines ────────────────────────────────────────────────
+function renderMap(data) {
+  clearMap();
+  const countEl = document.getElementById('map-count');
+
+  if (!data || data.length === 0) {
+    countEl.textContent = '無座標資料';
+    if (gmap) gmap.setCenter({ lat: 23.7, lng: 120.9 }), gmap.setZoom(9);
+    return;
+  }
+
+  const bounds = new google.maps.LatLngBounds();
+  let shown = 0;
+
+  data.forEach(o => {
+    const name      = o['乘客姓名'] || '';
+    const status    = o['訂單狀態'] || '';
+    const route     = o['路線'] || '';
+    const pickCoord = parseCoord(o['上車座標'] || '');
+    const dropCoord = parseCoord(o['下車座標'] || '');
+    const pickAddr  = o['上車地址'] || '';
+    const dropAddr  = o['下車地點'] || '';
+    const time      = o['搭乘時間'] || '';
+    const driver    = o['服務司機'] || '';
+
+    const infoContent = (type, addr) => `
+      <div style="font-size:13px;min-width:180px;">
+        <strong style="font-size:14px;">${name}</strong>
+        <div style="color:#64748b;margin:4px 0;">${route} · ${status}</div>
+        <div>🕐 ${time}</div>
+        <div>👤 ${driver}</div>
+        <div style="margin-top:4px;">${type === 'pick' ? '🟢 上車' : '🔴 下車'}：${addr}</div>
+      </div>`;
+
+    // Pickup marker (green)
+    if (pickCoord) {
+      const marker = new google.maps.Marker({
+        position: pickCoord,
+        map: gmap,
+        title: `${name} 上車`,
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 10,
+          fillColor: '#16a34a',
+          fillOpacity: 0.95,
+          strokeColor: '#fff',
+          strokeWeight: 2,
+        },
+        zIndex: 2,
+      });
+      marker.addListener('click', () => {
+        _infoWin.setContent(infoContent('pick', pickAddr));
+        _infoWin.open(gmap, marker);
+      });
+      _markers.push(marker);
+      bounds.extend(pickCoord);
+      shown++;
+    }
+
+    // Dropoff marker (red)
+    if (dropCoord) {
+      const marker = new google.maps.Marker({
+        position: dropCoord,
+        map: gmap,
+        title: `${name} 下車`,
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 10,
+          fillColor: '#dc2626',
+          fillOpacity: 0.95,
+          strokeColor: '#fff',
+          strokeWeight: 2,
+        },
+        zIndex: 2,
+      });
+      marker.addListener('click', () => {
+        _infoWin.setContent(infoContent('drop', dropAddr));
+        _infoWin.open(gmap, marker);
+      });
+      _markers.push(marker);
+      bounds.extend(dropCoord);
+      shown++;
+    }
+
+    // Dashed polyline connecting pickup ↔ dropoff
+    if (pickCoord && dropCoord) {
+      const line = new google.maps.Polyline({
+        path: [pickCoord, dropCoord],
+        geodesic: true,
+        strokeColor: '#2563eb',
+        strokeOpacity: 0,
+        strokeWeight: 0,
+        icons: [{
+          icon: { path: 'M 0,-1 0,1', strokeOpacity: 0.8, scale: 3 },
+          offset: '0',
+          repeat: '12px',
+        }],
+        map: gmap,
+        zIndex: 1,
+      });
+      _lines.push(line);
+    }
+  });
+
+  if (shown > 0 && !bounds.isEmpty()) {
+    gmap.fitBounds(bounds, { top: 40, right: 40, bottom: 40, left: 40 });
+    if (gmap.getZoom() > 15) gmap.setZoom(15);
+  }
+
+  countEl.textContent = `${data.length} 筆訂單，${shown} 個標記`;
+}
+
+// ── Date conversion ───────────────────────────────────────────────────────────
+function isoToMdy(iso) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-');
+  return `${m}/${d}/${y}`;
+}
+
+// ── Query ─────────────────────────────────────────────────────────────────────
+async function queryMap() {
+  const dateIso = document.getElementById('map-date').value;
+  const driver  = document.getElementById('map-driver').value;
+  const dateMdy = isoToMdy(dateIso);
+
+  const params = new URLSearchParams();
+  if (dateMdy) { params.set('from', dateMdy); params.set('to', dateMdy); }
+  if (driver)  params.set('driver', driver);
+
+  document.getElementById('map-count').textContent = '載入中…';
+
+  try {
+    const url = dateMdy
+      ? `${API}/api/schedule/range?${params}`
+      : `${API}/api/schedule/today`;
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    _mapData = await r.json();
+    renderMap(_mapData);
+  } catch(e) {
+    toast('查詢失敗：' + e.message, 'err');
+    document.getElementById('map-count').textContent = '查詢失敗';
+  }
+}
+
+function resetMap() {
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('map-date').value = today;
+  document.getElementById('map-driver').value = '';
+  queryMap();
+}
+
+function onSyncComplete() { queryMap(); }
+</script>
+
+<!-- Google Maps JavaScript API -->
+<script async
+  src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDAKBqMLzBfrpFO8JJXwu-A3EQFageJ5wE&callback=initMap&language=zh-TW&region=TW">
+</script>
+{% endblock %}

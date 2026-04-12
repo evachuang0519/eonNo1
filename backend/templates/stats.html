@@ -1,0 +1,346 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<style>
+.stats-section{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:20px;margin-bottom:20px;}
+.stats-section h3{font-size:14px;font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:6px;}
+.stats-section h3 .material-icons{font-size:18px;color:var(--primary);}
+.bar-chart{display:flex;flex-direction:column;gap:10px;}
+.bar-row{display:flex;align-items:center;gap:10px;}
+.bar-label{font-size:12px;color:var(--text);min-width:100px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;}
+.bar-track{flex:1;background:var(--bg);border-radius:4px;height:20px;overflow:hidden;}
+.bar-fill{height:100%;border-radius:4px;transition:width .4s ease;display:flex;align-items:center;padding:0 8px;}
+.bar-count{font-size:11px;font-weight:700;color:#fff;white-space:nowrap;}
+.bar-val{font-size:12px;color:var(--muted);min-width:32px;text-align:right;}
+.trend-chart{display:flex;align-items:flex-end;gap:3px;height:120px;padding-top:10px;}
+.trend-bar-wrap{display:flex;flex-direction:column;align-items:center;flex:1;height:100%;}
+.trend-bar{width:100%;background:var(--primary);border-radius:3px 3px 0 0;transition:height .4s ease;min-height:2px;opacity:.85;}
+.trend-bar:hover{opacity:1;}
+.trend-label{font-size:9px;color:var(--muted);margin-top:4px;writing-mode:vertical-lr;transform:rotate(180deg);height:36px;overflow:hidden;text-overflow:ellipsis;}
+.date-range-form{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px;margin-bottom:20px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;}
+.date-range-form label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:3px;}
+.date-range-form input[type="date"]{border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;background:var(--card);color:var(--text);outline:none;}
+.date-range-form input:focus{border-color:var(--primary);}
+.summary-num{font-size:36px;font-weight:800;color:var(--primary);}
+.summary-label{font-size:13px;color:var(--muted);}
+.summary-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:20px;}
+.summary-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:16px;text-align:center;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-title">
+  <span class="material-icons">bar_chart</span>服務統計
+</div>
+
+<!-- Date range form -->
+<div class="date-range-form">
+  <div>
+    <label>從</label>
+    <input type="date" id="s-from" value="{{ stat_from | default('') }}">
+  </div>
+  <div>
+    <label>到</label>
+    <input type="date" id="s-to" value="{{ stat_to | default('') }}">
+  </div>
+  <button class="btn btn-primary" onclick="queryStats()">
+    <span class="material-icons" style="font-size:15px">bar_chart</span>統計
+  </button>
+  <button class="btn btn-ghost" onclick="setThisMonth()">本月</button>
+  <button class="btn btn-ghost" onclick="setThisWeek()">本週</button>
+</div>
+
+<!-- Summary cards -->
+<div class="summary-cards" id="summary-cards">
+  <div class="summary-card">
+    <div class="summary-num" id="s-total">{{ stats.total | default(0) }}</div>
+    <div class="summary-label">接送總次數</div>
+  </div>
+  <div class="summary-card">
+    <div class="summary-num" id="s-done" style="color:var(--ok);">
+      {{ (stats.byStatus | default({})).get('完成', 0) + (stats.byStatus | default({})).get('已完成', 0) }}
+    </div>
+    <div class="summary-label">已完成</div>
+  </div>
+  <div class="summary-card">
+    <div class="summary-num" id="s-leave" style="color:var(--warn);">
+      {{ (stats.byStatus | default({})).get('請假', 0) }}
+    </div>
+    <div class="summary-label">請假次數</div>
+  </div>
+  <div class="summary-card">
+    <div class="summary-num" id="s-cancel" style="color:var(--err);">
+      {{ (stats.byStatus | default({})).get('取消', 0) }}
+    </div>
+    <div class="summary-label">取消次數</div>
+  </div>
+</div>
+
+<!-- Chart 1: Status distribution -->
+<div class="stats-section" id="chart-status">
+  <h3><span class="material-icons">donut_small</span>訂單狀態分佈</h3>
+  <div class="bar-chart" id="bar-status">
+    {% set by_status = stats.byStatus | default({}) %}
+    {% set status_total = stats.total | default(1) %}
+    {% for status, count in by_status.items() %}
+    {% set pct = ((count / status_total * 100) | round(1)) if status_total else 0 %}
+    {% set color = '#059669' if status in ['完成','已完成'] else '#d97706' if status in ['請假','暫停'] else '#dc2626' if status in ['取消','異常'] else '#2563eb' %}
+    <div class="bar-row">
+      <div class="bar-label">{{ status }}</div>
+      <div class="bar-track">
+        <div class="bar-fill" style="width:{{ pct }}%;background:{{ color }};">
+          <span class="bar-count">{{ count }}</span>
+        </div>
+      </div>
+      <div class="bar-val">{{ pct }}%</div>
+    </div>
+    {% else %}
+    <div style="color:var(--muted);font-size:13px;">無資料</div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- Chart 2: Driver trips (top 8) -->
+<div class="stats-section" id="chart-driver">
+  <h3><span class="material-icons">person</span>司機接送量（前8名）</h3>
+  <div class="bar-chart" id="bar-driver">
+    {% set by_driver = stats.byDriver | default({}) %}
+    {% set driver_max = (by_driver.values() | list | max) if by_driver else 1 %}
+    {% for driver, count in (by_driver.items() | list | sort(attribute='1', reverse=True))[:8] %}
+    {% set pct = ((count / driver_max * 100) | round(1)) if driver_max else 0 %}
+    <div class="bar-row">
+      <div class="bar-label">{{ driver }}</div>
+      <div class="bar-track">
+        <div class="bar-fill" style="width:{{ pct }}%;background:#2563eb;">
+          <span class="bar-count">{{ count }}</span>
+        </div>
+      </div>
+      <div class="bar-val">{{ count }}</div>
+    </div>
+    {% else %}
+    <div style="color:var(--muted);font-size:13px;">無資料</div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- Chart 3: Center trips -->
+<div class="stats-section" id="chart-center">
+  <h3><span class="material-icons">business</span>日照中心接送量</h3>
+  <div class="bar-chart" id="bar-center">
+    {% set by_center = stats.byCenter | default({}) %}
+    {% set center_max = (by_center.values() | list | max) if by_center else 1 %}
+    {% for center, count in (by_center.items() | list | sort(attribute='1', reverse=True)) %}
+    {% set pct = ((count / center_max * 100) | round(1)) if center_max else 0 %}
+    <div class="bar-row">
+      <div class="bar-label">{{ center }}</div>
+      <div class="bar-track">
+        <div class="bar-fill" style="width:{{ pct }}%;background:#7c3aed;">
+          <span class="bar-count">{{ count }}</span>
+        </div>
+      </div>
+      <div class="bar-val">{{ count }}</div>
+    </div>
+    {% else %}
+    <div style="color:var(--muted);font-size:13px;">無資料</div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- Chart 4: Daily trend -->
+<div class="stats-section" id="chart-trend">
+  <h3><span class="material-icons">show_chart</span>每日接送趨勢</h3>
+  {% set by_date = stats.byDate | default({}) %}
+  {% if by_date %}
+  {% set date_max = (by_date.values() | list | max) if by_date else 1 %}
+  <div class="trend-chart" id="trend-chart">
+    {% for date, count in (by_date.items() | list | sort(attribute='0')) %}
+    {% set pct = ((count / date_max * 100) | round(1)) if date_max else 0 %}
+    <div class="trend-bar-wrap" title="{{ date }}: {{ count }} 筆">
+      <div class="trend-bar" style="height:{{ pct }}%;" title="{{ date }}: {{ count }}"></div>
+      <div class="trend-label">{{ date[-5:] }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div style="color:var(--muted);font-size:13px;">無資料</div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Date helpers ──────────────────────────────────────────────────────────────
+
+function setThisMonth() {
+  const now = new Date();
+  const y = now.getFullYear(), m = now.getMonth();
+  const from = new Date(y, m, 1).toISOString().slice(0,10);
+  const to   = new Date(y, m+1, 0).toISOString().slice(0,10);
+  document.getElementById('s-from').value = from;
+  document.getElementById('s-to').value   = to;
+  queryStats();
+}
+
+function setThisWeek() {
+  const now = new Date();
+  const day = now.getDay() || 7; // Mon=1
+  const mon = new Date(now);
+  mon.setDate(now.getDate() - day + 1);
+  const sun = new Date(mon);
+  sun.setDate(mon.getDate() + 6);
+  document.getElementById('s-from').value = mon.toISOString().slice(0,10);
+  document.getElementById('s-to').value   = sun.toISOString().slice(0,10);
+  queryStats();
+}
+
+// ── Query & re-render ─────────────────────────────────────────────────────────
+
+async function queryStats() {
+  const from = document.getElementById('s-from').value;
+  const to   = document.getElementById('s-to').value;
+  if (!from || !to) { toast('請選擇日期區間', 'err'); return; }
+
+  const params = new URLSearchParams({ from, to });
+  try {
+    const r = await fetch(`${API}/api/stats/summary?${params}`);
+    if (!r.ok) throw new Error();
+    const stats = await r.json();
+    rerenderStats(stats);
+    toast('統計更新完成', 'ok');
+  } catch(_) {
+    toast('統計查詢失敗', 'err');
+  }
+}
+
+function renderBarChart(containerId, dataObj, color, showPct) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const entries = Object.entries(dataObj || {});
+  if (entries.length === 0) {
+    container.innerHTML = '<div style="color:var(--muted);font-size:13px;">無資料</div>';
+    return;
+  }
+  const max = Math.max(...entries.map(([,v])=>v)) || 1;
+  const total = entries.reduce((s,[,v])=>s+v,0) || 1;
+  container.innerHTML = entries.sort((a,b)=>b[1]-a[1]).map(([label,count]) => {
+    const pct = (count/max*100).toFixed(1);
+    const dispPct = showPct ? (count/total*100).toFixed(1) : count;
+    return `<div class="bar-row">
+      <div class="bar-label">${esc(label)}</div>
+      <div class="bar-track">
+        <div class="bar-fill" style="width:${pct}%;background:${color};">
+          <span class="bar-count">${count}</span>
+        </div>
+      </div>
+      <div class="bar-val">${showPct ? dispPct+'%' : count}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderTrend(dataObj) {
+  const container = document.getElementById('trend-chart');
+  if (!container) return;
+  const entries = Object.entries(dataObj || {}).sort((a,b)=>a[0].localeCompare(b[0]));
+  if (entries.length === 0) {
+    container.innerHTML = '<div style="color:var(--muted);font-size:13px;">無資料</div>';
+    return;
+  }
+  const max = Math.max(...entries.map(([,v])=>v)) || 1;
+  container.innerHTML = entries.map(([date, count]) => {
+    const pct = (count/max*100).toFixed(1);
+    return `<div class="trend-bar-wrap" title="${esc(date)}: ${count} 筆">
+      <div class="trend-bar" style="height:${pct}%;" title="${esc(date)}: ${count}"></div>
+      <div class="trend-label">${esc(date.slice(-5))}</div>
+    </div>`;
+  }).join('');
+}
+
+function rerenderStats(stats) {
+  // Summary numbers
+  const total = stats.total || 0;
+  const byStatus = stats.byStatus || {};
+  document.getElementById('s-total').textContent  = total;
+  document.getElementById('s-done').textContent   = (byStatus['完成']||0)+(byStatus['已完成']||0);
+  document.getElementById('s-leave').textContent  = byStatus['請假']||0;
+  document.getElementById('s-cancel').textContent = byStatus['取消']||0;
+
+  // Status chart
+  const statusColors = {
+    '完成':'#059669','已完成':'#059669','請假':'#d97706','暫停':'#d97706',
+    '取消':'#dc2626','異常':'#dc2626','進行中':'#2563eb','待接送':'#2563eb','客上':'#2563eb'
+  };
+  const statusContainer = document.getElementById('bar-status');
+  if (statusContainer) {
+    const statusMax = Math.max(...Object.values(byStatus)) || 1;
+    const statusTotal = total || 1;
+    statusContainer.innerHTML = Object.entries(byStatus).map(([st,count]) => {
+      const pct = (count/statusMax*100).toFixed(1);
+      const dispPct = (count/statusTotal*100).toFixed(1);
+      const color = statusColors[st] || '#64748b';
+      return `<div class="bar-row">
+        <div class="bar-label">${esc(st)}</div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width:${pct}%;background:${color};">
+            <span class="bar-count">${count}</span>
+          </div>
+        </div>
+        <div class="bar-val">${dispPct}%</div>
+      </div>`;
+    }).join('') || '<div style="color:var(--muted);font-size:13px;">無資料</div>';
+  }
+
+  // Driver chart (top 8)
+  const byDriver = stats.byDriver || {};
+  const driverEntries = Object.entries(byDriver).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const driverMax = Math.max(...driverEntries.map(([,v])=>v)) || 1;
+  document.getElementById('bar-driver').innerHTML = driverEntries.map(([name,count]) => {
+    const pct = (count/driverMax*100).toFixed(1);
+    return `<div class="bar-row">
+      <div class="bar-label">${esc(name)}</div>
+      <div class="bar-track">
+        <div class="bar-fill" style="width:${pct}%;background:#2563eb;">
+          <span class="bar-count">${count}</span>
+        </div>
+      </div>
+      <div class="bar-val">${count}</div>
+    </div>`;
+  }).join('') || '<div style="color:var(--muted);font-size:13px;">無資料</div>';
+
+  // Center chart
+  const byCenter = stats.byCenter || {};
+  const centerEntries = Object.entries(byCenter).sort((a,b)=>b[1]-a[1]);
+  const centerMax = Math.max(...centerEntries.map(([,v])=>v)) || 1;
+  document.getElementById('bar-center').innerHTML = centerEntries.map(([name,count]) => {
+    const pct = (count/centerMax*100).toFixed(1);
+    return `<div class="bar-row">
+      <div class="bar-label">${esc(name)}</div>
+      <div class="bar-track">
+        <div class="bar-fill" style="width:${pct}%;background:#7c3aed;">
+          <span class="bar-count">${count}</span>
+        </div>
+      </div>
+      <div class="bar-val">${count}</div>
+    </div>`;
+  }).join('') || '<div style="color:var(--muted);font-size:13px;">無資料</div>';
+
+  // Trend
+  renderTrend(stats.byDate || {});
+}
+
+function onSyncComplete() { queryStats(); }
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+(function() {
+  const now = new Date();
+  const from = document.getElementById('s-from');
+  const to   = document.getElementById('s-to');
+  if (!from.value) {
+    const d = new Date(now.getFullYear(), now.getMonth(), 1);
+    from.value = d.toISOString().slice(0,10);
+  }
+  if (!to.value) {
+    to.value = now.toISOString().slice(0,10);
+  }
+})();
+</script>
+{% endblock %}

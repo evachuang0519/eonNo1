@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 虛擬環境
+venv/
+env/
+.venv/
+
+# 環境設定（含敏感資訊）
+.env
+.env.*
+*.env
+backend/config.py
+
+# 資料庫備份（含個資）
+*.sql
+*.dump
+*.bak
+data/
+
+# 日誌
+*.log
+flask.log
+
+# 前端舊版（Classic ASP，已停用）
+frontend/
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Node（舊版遺留）
+node_modules/
+package-lock.json
+
+# IIS 設定（已停用）
+setup_iis.ps1

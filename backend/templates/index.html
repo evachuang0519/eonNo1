@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-title">
+  <span class="material-icons">dashboard</span>系統總覽
+</div>
+
+<div class="stats-grid" id="stats-grid">
+  {% for t in tables %}
+  <div class="stat-card" onclick="location.href='/table/{{ t.name | urlencode }}'">
+    <div class="stat-top">
+      <div class="stat-icon" style="background:{{ t.color }}">
+        <span class="material-icons">{{ t.icon }}</span>
+      </div>
+    </div>
+    <div class="stat-count" id="count-{{ loop.index }}">{{ t.count }}</div>
+    <div class="stat-label">{{ t.label }}</div>
+  </div>
+  {% else %}
+  <div class="empty">
+    <span class="material-icons">inbox</span>
+    尚無資料表
+  </div>
+  {% endfor %}
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+  <!-- Quick nav cards -->
+  <div class="data-card" style="padding:20px;">
+    <div style="font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:8px;">
+      <span class="material-icons" style="color:var(--primary)">flash_on</span>快速入口
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <a href="/today" style="text-decoration:none;">
+        <div style="background:var(--bg);border-radius:var(--r);padding:14px;display:flex;align-items:center;gap:10px;transition:background .15s;" onmouseover="this.style.background='#e2e8f0'" onmouseout="this.style.background='var(--bg)'">
+          <span class="material-icons" style="color:#2563eb">today</span>
+          <span style="font-size:13px;font-weight:600;">今日班表</span>
+        </div>
+      </a>
+      <a href="/schedule" style="text-decoration:none;">
+        <div style="background:var(--bg);border-radius:var(--r);padding:14px;display:flex;align-items:center;gap:10px;transition:background .15s;" onmouseover="this.style.background='#e2e8f0'" onmouseout="this.style.background='var(--bg)'">
+          <span class="material-icons" style="color:#7c3aed">calendar_month</span>
+          <span style="font-size:13px;font-weight:600;">班表總表</span>
+        </div>
+      </a>
+      <a href="/map" style="text-decoration:none;">
+        <div style="background:var(--bg);border-radius:var(--r);padding:14px;display:flex;align-items:center;gap:10px;transition:background .15s;" onmouseover="this.style.background='#e2e8f0'" onmouseout="this.style.background='var(--bg)'">
+          <span class="material-icons" style="color:#059669">map</span>
+          <span style="font-size:13px;font-weight:600;">路線圖</span>
+        </div>
+      </a>
+      <a href="/stats" style="text-decoration:none;">
+        <div style="background:var(--bg);border-radius:var(--r);padding:14px;display:flex;align-items:center;gap:10px;transition:background .15s;" onmouseover="this.style.background='#e2e8f0'" onmouseout="this.style.background='var(--bg)'">
+          <span class="material-icons" style="color:#d97706">bar_chart</span>
+          <span style="font-size:13px;font-weight:600;">服務統計</span>
+        </div>
+      </a>
+      <a href="/cases" style="text-decoration:none;">
+        <div style="background:var(--bg);border-radius:var(--r);padding:14px;display:flex;align-items:center;gap:10px;transition:background .15s;" onmouseover="this.style.background='#e2e8f0'" onmouseout="this.style.background='var(--bg)'">
+          <span class="material-icons" style="color:#0891b2">people</span>
+          <span style="font-size:13px;font-weight:600;">個案管理</span>
+        </div>
+      </a>
+      <a href="/synclog" style="text-decoration:none;">
+        <div style="background:var(--bg);border-radius:var(--r);padding:14px;display:flex;align-items:center;gap:10px;transition:background .15s;" onmouseover="this.style.background='#e2e8f0'" onmouseout="this.style.background='var(--bg)'">
+          <span class="material-icons" style="color:#64748b">history</span>
+          <span style="font-size:13px;font-weight:600;">同步紀錄</span>
+        </div>
+      </a>
+    </div>
+  </div>
+
+  <!-- System info card -->
+  <div class="data-card" style="padding:20px;">
+    <div style="font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:8px;">
+      <span class="material-icons" style="color:var(--primary)">info</span>系統資訊
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;font-size:13px;">
+      <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
+        <span style="color:var(--muted)">資料表數量</span>
+        <span style="font-weight:600;">{{ tables | length }}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
+        <span style="color:var(--muted)">今日日期</span>
+        <span style="font-weight:600;" id="today-date">—</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
+        <span style="color:var(--muted)">同步狀態</span>
+        <span id="status-text" style="font-weight:600;">未同步</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:8px 0;">
+        <span style="color:var(--muted)">總筆數</span>
+        <span style="font-weight:600;" id="total-count">{{ tables | sum(attribute='count') }}</span>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Set today's date
+document.getElementById('today-date').textContent = new Date().toLocaleDateString('zh-TW');
+
+// Called after sync completes — refresh all stat counts
+async function onSyncComplete() {
+  try {
+    const r = await fetch(`${API}/api/tables`);
+    if (!r.ok) return;
+    const tables = await r.json();
+    let total = 0;
+    tables.forEach((t, i) => {
+      const el = document.getElementById(`count-${i + 1}`);
+      if (el) el.textContent = t.count ?? 0;
+      total += (t.count ?? 0);
+    });
+    const tc = document.getElementById('total-count');
+    if (tc) tc.textContent = total;
+    const st = document.getElementById('status-text');
+    if (st) { st.textContent = '同步完成'; st.style.color = 'var(--ok)'; }
+  } catch(_) {}
+}
+
+// Listen for SSE sync_done to update status text
+document.addEventListener('DOMContentLoaded', () => {
+  const st = document.getElementById('status-text');
+  if (st) {
+    document.addEventListener('syncDone', () => {
+      st.textContent = '同步完成';
+      st.style.color = 'var(--ok)';
+    });
+  }
+});
+</script>
+{% endblock %}

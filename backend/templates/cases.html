@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<style>
+.cases-filter{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:20px;align-items:center;}
+.cases-filter select{border:1px solid var(--border);border-radius:var(--r);padding:6px 10px;font-size:13px;background:var(--card);color:var(--text);outline:none;}
+.cases-filter select:focus{border-color:var(--primary);}
+.cases-tbl td{vertical-align:middle;}
+.case-name{font-weight:700;font-size:13px;}
+.case-route{font-size:11px;color:var(--muted);margin-top:2px;}
+.case-center{font-size:11px;color:var(--muted);margin-top:1px;}
+.week-dots{display:flex;gap:3px;align-items:center;}
+.wdot{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#fff;flex-shrink:0;}
+.wdot-on{background:var(--ok);}
+.wdot-off{background:#cbd5e1;color:#64748b;}
+.case-addr{font-size:12px;color:var(--muted);}
+.case-addr div{margin-bottom:2px;}
+.case-row{border-left:4px solid transparent;}
+.case-row.status-ok{border-left-color:var(--ok);}
+.case-row.status-pause{border-left-color:var(--err);}
+.case-row.status-other{border-left-color:#cbd5e1;}
+.edit-btn{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;cursor:pointer;background:transparent;color:var(--text);transition:all .15s;}
+.edit-btn:hover{background:var(--primary);color:#fff;border-color:var(--primary);}
+.phone-link{color:var(--primary);text-decoration:none;font-size:12px;}
+.phone-link:hover{text-decoration:underline;}
+.cases-count{font-size:12px;color:var(--muted);margin-left:auto;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-title">
+  <span class="material-icons">people</span>個案管理
+</div>
+
+<!-- Filter bar -->
+<div class="cases-filter">
+  <div class="search-box">
+    <span class="material-icons">search</span>
+    <input type="text" id="case-search" placeholder="搜尋姓名、地址、路線…" oninput="filterCases()">
+  </div>
+  <select id="f-center" onchange="filterCases()">
+    <option value="">全部中心</option>
+    {% for c in centers %}
+    <option>{{ c }}</option>
+    {% endfor %}
+  </select>
+  <select id="f-status" onchange="filterCases()">
+    <option value="">全部狀態</option>
+    <option>正常</option>
+    <option>暫停</option>
+    <option>結案</option>
+    <option>待審</option>
+  </select>
+  <select id="f-route" onchange="filterCases()">
+    <option value="">全部路線</option>
+  </select>
+  <button class="btn btn-primary" onclick="openAddModal('個案總表')">
+    <span class="material-icons" style="font-size:15px">add</span>新增個案
+  </button>
+  <span class="cases-count" id="cases-count"></span>
+</div>
+
+<!-- Table -->
+<div class="data-card">
+  <div class="tbl-wrap">
+    <table class="cases-tbl">
+      <thead>
+        <tr>
+          <th>姓名 / 路線 / 中心</th>
+          <th>狀態 / 電話</th>
+          <th>週排班</th>
+          <th>上下車地址</th>
+          <th style="width:60px;text-align:center;">編輯</th>
+        </tr>
+      </thead>
+      <tbody id="cases-body">
+        <!-- rendered by JS -->
+      </tbody>
+    </table>
+  </div>
+  <div class="tbl-footer">
+    <span id="cases-footer">共 {{ cases | length }} 筆</span>
+    <span style="color:var(--muted)">點擊列查看詳情</span>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let _cases = {{ cases | tojson }};
+
+const WEEK_DAYS = [
+  {field:'週一', label:'一'},
+  {field:'週二', label:'二'},
+  {field:'週三', label:'三'},
+  {field:'週四', label:'四'},
+  {field:'週五', label:'五'},
+  {field:'週六', label:'六'},
+  {field:'週日', label:'日'},
+];
+
+// ── Populate route filter ──────────────────────────────────────────────────────
+function populateRouteFilter(cases) {
+  const sel = document.getElementById('f-route');
+  const cur = sel.value;
+  const routes = [...new Set(cases.map(c => c['路線'] || '').filter(Boolean))].sort();
+  sel.innerHTML = '<option value="">全部路線</option>' +
+    routes.map(r => `<option ${r===cur?'selected':''}>${esc(r)}</option>`).join('');
+}
+
+// ── Status row class ──────────────────────────────────────────────────────────
+function statusRowClass(st) {
+  if (st === '正常') return 'status-ok';
+  if (st === '暫停' || st === '結案') return 'status-pause';
+  return 'status-other';
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderCases(cases) {
+  const tbody   = document.getElementById('cases-body');
+  const footer  = document.getElementById('cases-footer');
+  const countEl = document.getElementById('cases-count');
+
+  if (!cases || cases.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" class="empty">
+      <span class="material-icons">people_outline</span>無符合個案
+    </td></tr>`;
+    if (footer) footer.textContent = '共 0 筆';
+    if (countEl) countEl.textContent = '';
+    return;
+  }
+
+  if (footer)  footer.textContent  = `共 ${cases.length} 筆`;
+  if (countEl) countEl.textContent = `${cases.length} 筆`;
+
+  tbody.innerHTML = cases.map(c => {
+    const key    = c['姓名路程'] || '';
+    const name   = c['乘客姓名'] || '';
+    const route  = c['路線']    || '';
+    const center = c['日照中心'] || '';
+    const status = c['服務狀態'] || '';
+    const phone  = c['乘客電話'] || c['連絡電話'] || '';
+    const pickUp = c['上車地點'] || '';
+    const dropOff= c['下車地點'] || '';
+    const rowCls = statusRowClass(status);
+
+    const dots = WEEK_DAYS.map(({field, label}) => {
+      const on = (c[field] || '').toUpperCase() === 'Y';
+      return `<div class="wdot ${on ? 'wdot-on' : 'wdot-off'}" title="${field}">${label}</div>`;
+    }).join('');
+
+    const statusBadgeCls = status === '正常' ? 'bg-green'
+      : status === '暫停' ? 'bg-red'
+      : status === '結案' ? 'bg-gray'
+      : 'bg-yellow';
+
+    return `<tr class="case-row ${rowCls}" onclick="openRecord('個案總表', ${JSON.stringify(key)})">
+      <td>
+        <div class="case-name">${esc(name)}</div>
+        ${route  ? `<div class="case-route"><span class="material-icons" style="font-size:12px;vertical-align:middle">route</span> ${esc(route)}</div>` : ''}
+        ${center ? `<div class="case-center"><span class="material-icons" style="font-size:12px;vertical-align:middle">business</span> ${esc(center)}</div>` : ''}
+      </td>
+      <td>
+        <span class="badge ${statusBadgeCls}">${esc(status) || '—'}</span>
+        ${phone ? `<div style="margin-top:6px;"><a class="phone-link" href="tel:${esc(phone)}" onclick="event.stopPropagation()">
+          <span class="material-icons" style="font-size:12px;vertical-align:middle">phone</span>${esc(phone)}
+        </a></div>` : ''}
+      </td>
+      <td><div class="week-dots">${dots}</div></td>
+      <td>
+        <div class="case-addr">
+          ${pickUp  ? `<div><span class="material-icons" style="font-size:12px;vertical-align:middle;color:#16a34a">arrow_upward</span> ${esc(pickUp)}</div>`  : ''}
+          ${dropOff ? `<div><span class="material-icons" style="font-size:12px;vertical-align:middle;color:#dc2626">arrow_downward</span> ${esc(dropOff)}</div>` : ''}
+          ${!pickUp && !dropOff ? '<span style="color:var(--muted)">—</span>' : ''}
+        </div>
+      </td>
+      <td style="text-align:center;" onclick="event.stopPropagation()">
+        <button class="edit-btn" onclick="openRecord('個案總表', ${JSON.stringify(key)})">
+          <span class="material-icons" style="font-size:14px">edit</span>
+        </button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Filter ────────────────────────────────────────────────────────────────────
+function filterCases() {
+  const q       = (document.getElementById('case-search').value || '').toLowerCase();
+  const fCenter = document.getElementById('f-center').value;
+  const fStatus = document.getElementById('f-status').value;
+  const fRoute  = document.getElementById('f-route').value;
+
+  const filtered = _cases.filter(c => {
+    if (fCenter && (c['日照中心'] || '') !== fCenter) return false;
+    if (fStatus && (c['服務狀態'] || '') !== fStatus) return false;
+    if (fRoute  && (c['路線']     || '') !== fRoute)  return false;
+    if (q) {
+      const text = [c['乘客姓名'],c['路線'],c['上車地點'],c['下車地點'],c['乘客電話'],c['連絡電話'],c['日照中心'],c['姓名路程']]
+        .map(v=>v||'').join(' ').toLowerCase();
+      if (!text.includes(q)) return false;
+    }
+    return true;
+  });
+
+  renderCases(filtered);
+}
+
+function onSyncComplete() {
+  // Re-fetch cases
+  fetch(`${API}/api/${encodeURIComponent('個案總表')}`)
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      if (data) {
+        _cases = data;
+        populateRouteFilter(_cases);
+        filterCases();
+      }
+    }).catch(() => {});
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+populateRouteFilter(_cases);
+renderCases(_cases);
+</script>
+{% endblock %}

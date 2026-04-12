@@ -1,0 +1,291 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<style>
+.filter-panel{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:16px;margin-bottom:20px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;}
+.filter-group{display:flex;flex-direction:column;gap:4px;}
+.filter-group label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;}
+.filter-group select,
+.filter-group input[type="date"]{border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;background:var(--card);color:var(--text);outline:none;min-width:130px;}
+.filter-group select:focus,
+.filter-group input:focus{border-color:var(--primary);}
+.gen-panel{background:var(--card);border:1px solid var(--border);border-radius:var(--r);margin-bottom:20px;overflow:hidden;}
+.gen-panel-head{padding:12px 16px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;}
+.gen-panel-head:hover{background:var(--bg);}
+.gen-panel-body{padding:16px;border-top:1px solid var(--border);display:none;}
+.gen-panel-body.open{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;}
+.preview-list{margin-top:14px;background:var(--bg);border-radius:6px;padding:10px 14px;font-size:12px;max-height:220px;overflow-y:auto;}
+.preview-list li{padding:3px 0;border-bottom:1px solid var(--border);}
+.preview-list li:last-child{border-bottom:none;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-title">
+  <span class="material-icons">calendar_month</span>班表總表
+</div>
+
+<!-- Filter panel -->
+<div class="filter-panel">
+  <div class="filter-group">
+    <label>從</label>
+    <input type="date" id="f-from" value="{{ stat_from | default('') }}">
+  </div>
+  <div class="filter-group">
+    <label>到</label>
+    <input type="date" id="f-to" value="{{ stat_to | default('') }}">
+  </div>
+  <div class="filter-group">
+    <label>服務司機</label>
+    <select id="f-driver">
+      <option value="">全部司機</option>
+      {% for d in drivers %}
+      <option>{{ d }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="filter-group">
+    <label>日照中心</label>
+    <select id="f-center">
+      <option value="">全部中心</option>
+      {% for c in centers %}
+      <option>{{ c }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button class="btn btn-primary" onclick="querySchedule()">
+    <span class="material-icons" style="font-size:15px">search</span>查詢
+  </button>
+  <button class="btn btn-ghost" onclick="clearFilters()">
+    <span class="material-icons" style="font-size:15px">clear</span>清除
+  </button>
+  <span id="result-count" style="font-size:12px;color:var(--muted);margin-left:auto;align-self:center;"></span>
+</div>
+
+<!-- Generate schedule panel -->
+<div class="gen-panel">
+  <div class="gen-panel-head" onclick="toggleGenPanel()">
+    <span class="material-icons" style="color:var(--primary);font-size:18px">auto_awesome</span>
+    <span style="font-weight:700;font-size:14px;">生成班表</span>
+    <span id="gen-chevron" class="material-icons" style="margin-left:auto;color:var(--muted)">expand_more</span>
+  </div>
+  <div class="gen-panel-body" id="gen-panel-body">
+    <div class="filter-group">
+      <label>目標日期</label>
+      <input type="date" id="gen-date">
+    </div>
+    <button class="btn btn-ghost" onclick="previewGenerate()">
+      <span class="material-icons" style="font-size:15px">visibility</span>預覽
+    </button>
+    <button class="btn btn-primary" id="gen-confirm-btn" onclick="confirmGenerate()" disabled>
+      <span class="material-icons" style="font-size:15px">check_circle</span>確認生成
+    </button>
+    <div id="gen-preview" style="width:100%;"></div>
+  </div>
+</div>
+
+<!-- Data table -->
+<div class="data-card">
+  <div class="tbl-wrap">
+    <table id="sched-table">
+      <thead>
+        <tr>
+          <th>搭乘日期</th>
+          <th>搭乘時間</th>
+          <th>乘客姓名</th>
+          <th>訂單狀態</th>
+          <th>路線</th>
+          <th>服務司機</th>
+          <th>車號</th>
+          <th>日照中心</th>
+          <th>上車地址</th>
+          <th>備註</th>
+        </tr>
+      </thead>
+      <tbody id="sched-body">
+        {% if initial %}
+          {% for o in initial %}
+          <tr onclick="openRecord('{{ current_table | default('orders') }}', '{{ o._key | default('') }}')">
+            <td>{{ o.get('搭乘日期', '') }}</td>
+            <td>{{ o.get('搭乘時間', '') }}</td>
+            <td>{{ o.get('乘客姓名', '') }}</td>
+            <td>{% set st = o.get('訂單狀態', '') %}
+              <span class="badge {% if st in ['完成','已完成'] %}bg-green{% elif st in ['請假','暫停'] %}bg-yellow{% elif st in ['取消','異常'] %}bg-red{% elif st in ['進行中','待接送','客上'] %}bg-blue{% else %}bg-gray{% endif %}">{{ st }}</span>
+            </td>
+            <td>{{ o.get('路線', '') }}</td>
+            <td>{{ o.get('服務司機', '') }}</td>
+            <td>{{ o.get('車號', '') }}</td>
+            <td>{{ o.get('日照中心', '') }}</td>
+            <td>{{ o.get('上車地址', '') }}</td>
+            <td>{{ o.get('備註', '') }}</td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr><td colspan="10" class="empty"><span class="material-icons">search</span>請輸入條件查詢班表</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+  <div class="tbl-footer">
+    <span id="footer-count">共 {{ initial | length }} 筆</span>
+    <span style="color:var(--muted)">點擊列查看詳情</span>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Set default date range (today ± 7 days)
+(function() {
+  const today = new Date();
+  const fmt = d => d.toISOString().slice(0,10);
+  const from = document.getElementById('f-from');
+  const to   = document.getElementById('f-to');
+  const gen  = document.getElementById('gen-date');
+  if (!from.value) from.value = fmt(new Date(today - 7*86400000));
+  if (!to.value)   to.value   = fmt(new Date(today.getTime() + 7*86400000));
+  gen.value = fmt(today);
+})();
+
+// ── Query ─────────────────────────────────────────────────────────────────────
+
+async function querySchedule() {
+  const from   = document.getElementById('f-from').value;
+  const to     = document.getElementById('f-to').value;
+  const driver = document.getElementById('f-driver').value;
+  const center = document.getElementById('f-center').value;
+
+  const params = new URLSearchParams();
+  if (from)   params.set('from', from);
+  if (to)     params.set('to', to);
+  if (driver) params.set('driver', driver);
+  if (center) params.set('center', center);
+
+  const rc = document.getElementById('result-count');
+  rc.textContent = '查詢中…';
+
+  try {
+    const r = await fetch(`${API}/api/schedule/range?${params}`);
+    if (!r.ok) throw new Error();
+    const data = await r.json();
+    renderScheduleTable(data);
+    rc.textContent = `共 ${data.length} 筆`;
+  } catch(_) {
+    toast('查詢失敗', 'err');
+    rc.textContent = '';
+  }
+}
+
+function clearFilters() {
+  document.getElementById('f-driver').value = '';
+  document.getElementById('f-center').value = '';
+}
+
+function renderScheduleTable(orders) {
+  const tbody = document.getElementById('sched-body');
+  const footer = document.getElementById('footer-count');
+
+  if (!orders || orders.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="10" class="empty">
+      <span class="material-icons">search_off</span>無符合資料
+    </td></tr>`;
+    if (footer) footer.textContent = '共 0 筆';
+    return;
+  }
+
+  tbody.innerHTML = orders.map(o => {
+    const key = o._key || o.id || '';
+    const st  = o['訂單狀態'] || o.status || '';
+    const cls = {'完成':'bg-green','已完成':'bg-green','請假':'bg-yellow','暫停':'bg-yellow',
+                 '取消':'bg-red','異常':'bg-red','進行中':'bg-blue','待接送':'bg-blue','客上':'bg-blue'}[st] || 'bg-gray';
+    return `<tr onclick="openRecord('orders', ${JSON.stringify(key)})">
+      <td>${esc(o['搭乘日期'] || '')}</td>
+      <td>${esc(o['搭乘時間'] || '')}</td>
+      <td>${esc(o['乘客姓名'] || '')}</td>
+      <td><span class="badge ${cls}">${esc(st)}</span></td>
+      <td>${esc(o['路線'] || '')}</td>
+      <td>${esc(o['服務司機'] || '')}</td>
+      <td>${esc(o['車號'] || '')}</td>
+      <td>${esc(o['日照中心'] || '')}</td>
+      <td>${esc(o['上車地址'] || '')}</td>
+      <td>${esc(o['備註'] || '')}</td>
+    </tr>`;
+  }).join('');
+
+  if (footer) footer.textContent = `共 ${orders.length} 筆`;
+}
+
+// ── Generate panel ────────────────────────────────────────────────────────────
+
+function toggleGenPanel() {
+  const body = document.getElementById('gen-panel-body');
+  const chev = document.getElementById('gen-chevron');
+  const open = body.classList.toggle('open');
+  chev.textContent = open ? 'expand_less' : 'expand_more';
+}
+
+let _previewData = null;
+
+async function previewGenerate() {
+  const date = document.getElementById('gen-date').value;
+  if (!date) { toast('請選擇目標日期', 'err'); return; }
+
+  const div = document.getElementById('gen-preview');
+  div.innerHTML = '<span style="font-size:12px;color:var(--muted)">預覽中…</span>';
+
+  try {
+    const r = await fetch(`${API}/api/action/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, dry_run: true })
+    });
+    if (!r.ok) throw new Error((await r.json().catch(()=>({}))).error || '預覽失敗');
+    _previewData = await r.json();
+    const items = _previewData.preview || _previewData.items || [];
+    if (items.length === 0) {
+      div.innerHTML = '<div style="font-size:12px;color:var(--muted);margin-top:10px;">無可生成班表</div>';
+      document.getElementById('gen-confirm-btn').disabled = true;
+    } else {
+      div.innerHTML = `<div class="preview-list"><strong style="display:block;margin-bottom:6px;">預覽 — ${date} 共 ${items.length} 筆：</strong>
+        <ul style="list-style:none;">
+          ${items.map(i => `<li>${esc(i['乘客姓名'] || i.name || JSON.stringify(i))}</li>`).join('')}
+        </ul>
+      </div>`;
+      document.getElementById('gen-confirm-btn').disabled = false;
+    }
+  } catch(err) {
+    toast(err.message || '預覽失敗', 'err');
+    div.innerHTML = '';
+  }
+}
+
+async function confirmGenerate() {
+  const date = document.getElementById('gen-date').value;
+  if (!date) { toast('請選擇目標日期', 'err'); return; }
+  if (!confirm(`確定要為 ${date} 生成班表？`)) return;
+
+  const btn = document.getElementById('gen-confirm-btn');
+  btn.disabled = true;
+
+  try {
+    const r = await fetch(`${API}/api/action/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date })
+    });
+    if (!r.ok) throw new Error((await r.json().catch(()=>({}))).error || '生成失敗');
+    const data = await r.json();
+    toast(`已生成 ${data.count || 0} 筆班表`, 'ok');
+    document.getElementById('gen-preview').innerHTML = '';
+    _previewData = null;
+    querySchedule();
+  } catch(err) {
+    toast(err.message || '生成失敗', 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function onSyncComplete() { querySchedule(); }
+</script>
+{% endblock %}

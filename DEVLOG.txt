@@ -1,0 +1,399 @@
+================================================================
+  日照交通服務系統 — 開發日誌
+  專案路徑：C:\project\eonNo1
+  技術棧：Python Flask 3.x + PostgreSQL 17 + AppSheet REST API v2
+================================================================
+
+╔══════════════════════════════════════════════════════════════╗
+║                    開發進度總覽                              ║
+╠══════════════════════════════════════════════════════════════╣
+║  已完成  ████████████████████░░░░░░  75%                    ║
+║  進行中  個人登入 / 前端 v2 適配                             ║
+║  待開發  班表產生器、通知系統、行動版介面                    ║
+╚══════════════════════════════════════════════════════════════╝
+
+
+================================================================
+【開發日誌】
+================================================================
+
+────────────────────────────────────────────────────────────────
+  [階段一] 系統建立 — 2026-04-06
+────────────────────────────────────────────────────────────────
+
+  背景
+  ────
+  原系統以 Classic ASP + IIS 運行，維護困難、無法擴充。
+  決定以 Python Flask 重寫後端，保留 AppSheet 作為行動端入口。
+
+  完成項目
+  ────────
+  ✅ 建立 Python Flask 後端（Port 8000）
+  ✅ 建立 PostgreSQL 17 資料庫（rizhaodb）
+  ✅ 建立 JSONB records 資料表（快速儲存 AppSheet 欄位）
+  ✅ 實作 AppSheet REST API v2 客戶端（appsheet_client.py）
+  ✅ 實作 APScheduler 每 30 秒自動從 AppSheet 拉取資料
+  ✅ 建立 8 個前端頁面（Jinja2 模板）：
+       - /              總覽儀表板
+       - /today         今日班表
+       - /schedule      班表總表
+       - /map           路線圖（Google Maps）
+       - /stats         服務統計
+       - /cases         個案管理
+       - /table/<名稱>  通用資料表 CRUD
+       - /synclog       同步紀錄
+  ✅ 實作 SSE 即時推播（Server-Sent Events）
+  ✅ 建立 CRUD API（新增 / 查詢 / 修改 / 刪除）
+  ✅ 班表動作 API（上車 / 下車 / 請假 / 產生班表）
+
+  資料庫（v1）
+  ────────────
+    records (JSONB)   — 所有 AppSheet 資料平鋪存放
+    sync_log          — 同步紀錄
+
+
+────────────────────────────────────────────────────────────────
+  [階段二] 功能修復與 UI 改善 — 2026-04-09 ~ 2026-04-10
+────────────────────────────────────────────────────────────────
+
+  問題與修復
+  ──────────
+  ✅ Flask 模板快取問題 → 新增 TEMPLATES_AUTO_RELOAD = True
+  ✅ SSE 架構重寫：base.html 統一監聽 onmessage，分發
+       CustomEvent(sse:<type>) 讓各頁面獨立處理
+  ✅ base.html CRUD URL 錯誤：
+       /api/record/{table} → /api/{table}
+  ✅ base.html 方法錯誤：PATCH → PUT
+  ✅ Modal 載入問題：data.record ?? data（API 直接回傳物件）
+  ✅ openAddModal 改為 async 函數，先 fetch 欄位結構
+  ✅ cases.html 資料表名稱錯誤：'cases' → '個案總表'
+  ✅ cases.html 欄位名稱錯誤（上車地址 → 上車地點 等）
+  ✅ Flask 路由衝突：/api/sync/table/<path> 與通用路由衝突
+       → 改名為 /api/sync/one/<path:table_name>
+  ✅ 同步管理頁（synclog.html）重寫：
+       - 每個資料表獨立卡片 + 個別同步按鈕
+       - 全域進度條 + 百分比即時更新
+       - SSE 事件：sync_start / sync_progress / sync_table_done / sync_complete
+
+
+────────────────────────────────────────────────────────────────
+  [階段三] 資料庫正規化 — 2026-04-11
+────────────────────────────────────────────────────────────────
+
+  背景
+  ────
+  JSONB 架構雖彈性高，但無法做關聯查詢、缺乏資料完整性約束。
+  決定將資料正規化，同時設計角色權限系統。
+
+  設計決策
+  ────────
+  · 個案總表有「去程 / 回程」兩筆 → 拆分為 patients（人）+ patient_routes（路程）
+  · 司機與司機名單（帳號）合併 → 一張 drivers 表
+  · 帳號系統獨立：users 表關聯 roles / drivers / centers
+  · 新增 dirty 旗標機制追蹤未推送變更
+  · 新增 appsheet_key 欄位對應 AppSheet 主鍵
+
+  資料庫 v2（schema_v2.sql）— 11 張資料表
+  ──────────────────────────────────────────
+    centers           日照中心        5 筆
+    drivers           司機            8 筆
+    patients          個案（人）      61 筆
+    patient_routes    個案路程        122 筆（每人去程+回程）
+    orders            班表訂單        612 筆
+    roles             角色            4 種
+    permissions       功能權限        20 項
+    role_permissions  角色權限對應    44 筆
+    users             使用者帳號      11 筆
+    sync_queue        推送佇列        —
+    sync_log          同步日誌        —
+
+  角色定義
+  ────────
+    admin       系統管理員（全功能）
+    dispatcher  調度員（班表 + 個案管理）
+    center      日照中心（本中心資料）
+    driver      司機（今日班表 + 行程更新）
+
+  遷移執行（migrate_v2.py）
+  ─────────────────────────
+  ✅ Step 1：執行 schema_v2.sql（psql 子程序，繞過 pg8000 多語句限制）
+  ✅ Step 2：日照名單 → centers（5 筆）
+  ✅ Step 3：司機 + 司機名單 → drivers（8 筆，合併去重）
+  ✅ Step 4：個案總表 → patients（61 人）+ patient_routes（122 路程）
+  ✅ Step 5：日照班表 → orders（612 筆）
+             修復：duration_min "0.0" 字串 → safe_int() 轉換
+  ✅ Step 6：使用者帳號（5 中心 + 5 司機 + 1 admin = 11 筆）
+  ✅ 驗證腳本（verify_migration.py）確認所有表格資料完整
+
+  遷移驗證結果
+  ────────────
+    訂單有個案對應：82.5%（140 筆無對應，姓名不完全匹配）
+    訂單有司機對應：100%
+    路程有預設司機：26.2%
+
+
+────────────────────────────────────────────────────────────────
+  [階段四] 推送同步引擎 — 2026-04-12
+────────────────────────────────────────────────────────────────
+
+  架構改變
+  ────────
+  舊：AppSheet → 本機（每 30 秒自動拉取）
+  新：本機 → AppSheet（使用者手動推送，dirty 記錄）
+
+  完成項目
+  ────────
+  ✅ 建立 sync_engine_v2.py
+       · push_table(table, progress_cb)  — 單表推送
+       · push_all(progress_cb)           — 全量推送
+       · get_push_status()               — dirty 計數 + 日誌
+       · 自動判斷 edit_row / add_row（依 appsheet_key）
+       · 推送成功後清除 dirty=FALSE
+  ✅ 建立 appsheet_assembler.py
+       · assemble_centers()    → AppSheet 日照名單格式
+       · assemble_drivers()    → AppSheet 司機格式
+       · assemble_cases()      → AppSheet 個案總表格式（患者+路程JOIN）
+       · assemble_orders()     → AppSheet 日照班表格式
+  ✅ 更新 app.py
+       · 移除 APScheduler（不再自動拉取）
+       · 新增 /api/v2/* 正規化 CRUD 路由（centers/drivers/patients/orders/users）
+       · /api/sync/trigger → 觸發推送
+       · /api/sync/dirty  → 查詢待推送筆數
+  ✅ 建立 database_v2.py
+       · CRUD：get/upsert for centers, drivers, patients, orders
+       · get_dirty_counts()、mark_synced()、mark_sync_failed()
+       · _to_dict() 修正 date/time/Decimal JSON 序列化
+  ✅ 更新 synclog.html
+       · 改為推送模式 UI
+       · 顯示待推送筆數（dirtyCount）
+       · 日誌加入方向欄（↑ 推送 / ↓ 拉取）
+
+  驗證結果（2026-04-12 功能測試）
+  ──────────────────────────────
+    9 個頁面載入   PASS
+    v2 API 全部   PASS（centers:5, drivers:8, patients:61, orders:612, users:11）
+    CRUD 操作     PASS（新增/查詢/修改/刪除）
+    dirty 追蹤    PASS（修改後立即反映）
+    SSE 連線      PASS
+    同步管理頁面  PASS
+
+
+================================================================
+【已知問題 / 技術債】
+================================================================
+
+  優先度 HIGH
+  ──────────
+  ❶ Google Maps API Key 失效
+     位置：backend/templates/map.html 最後 <script> 標籤
+     症狀：地圖頁面顯示「糟糕！出了點狀況。」
+     解法：至 Google Cloud Console 申請新金鑰，啟用 Maps JavaScript API
+           更新 map.html 的 key= 參數
+           建議：移至 config.py 統一管理（GOOGLE_MAPS_KEY）
+
+  ❷ 訂單有 17.5%（約 140 筆）找不到對應個案
+     位置：orders.patient_id IS NULL
+     原因：AppSheet 遷移時姓名不完全匹配（可能有空格、全半形差異）
+     解法：建立手動對應工具，或在 orders 中用 notes 欄位重新比對
+
+  優先度 MEDIUM
+  ─────────────
+  ❸ 前端頁面（/today, /schedule, /cases 等）仍讀取舊版 JSONB API
+     舊版 API 資料與正規化 v2 表格筆數不一致
+     例：/api/司機 = 6筆，/api/v2/drivers = 8筆
+     解法：逐步將頁面改接 /api/v2/* 路由
+
+  ❹ 尚無登入驗證機制
+     目前所有頁面直接開放，沒有身份驗證
+     users 表與 roles 已建立，但未實作 session/token
+
+  ❺ 軟刪除的記錄未推送至 AppSheet
+     deleted=TRUE 的記錄從 dirty 計數排除
+     需實作：偵測 deleted=TRUE + dirty=TRUE → 呼叫 delete_row
+
+  優先度 LOW
+  ──────────
+  ❻ 遷移後 center IDs 從 6 開始（早期測試留下殘留值）
+     不影響功能，但若需要從頭重建需清理
+
+  ❼ patient_routes 預設司機覆蓋率只有 26.2%
+     其餘 73.8% 無預設司機，可能影響自動產生班表品質
+
+
+================================================================
+【下一步開發計畫】
+================================================================
+
+  ── Sprint 1（高優先度，基礎功能補齊）────────────────────────
+
+  [ ] 1. 修復 Google Maps API Key
+         · 取得有效 Google Maps JavaScript API 金鑰
+         · 移至 config.py 統一管理（GOOGLE_MAPS_KEY）
+         · map.html 改用 Jinja2 注入：{{ config.GOOGLE_MAPS_KEY }}
+
+  [ ] 2. 實作使用者登入系統
+         · 使用 Flask-Session 或 JWT
+         · 登入頁面（/login）
+         · 根據 role 控制可存取的頁面與 API
+         · 司機登入只看今日自己的班表
+         · 日照中心登入只看本中心資料
+         路徑：backend/auth.py + templates/login.html
+
+  [ ] 3. 前端頁面切換至 v2 API
+         · /cases → 改接 /api/v2/patients（含路程）
+         · /today → 改接 /api/v2/orders（今日日期篩選）
+         · /schedule → 改接 /api/v2/orders（日期範圍）
+         · /table/司機 → 改接 /api/v2/drivers
+         · /table/日照名單 → 改接 /api/v2/centers
+
+  ── Sprint 2（核心業務功能）────────────────────────────────────
+
+  [ ] 4. 智慧班表產生器（升級版）
+         · 從 patient_routes 取得各個案的週次設定
+         · 依星期自動選出當日應服務個案
+         · 自動依 default_driver_id 分配司機
+         · 預防重複建立（同一天同一個案）
+         · 支援批次產生（多天一次產生）
+         路徑：/api/v2/action/generate + UI 在 /schedule 頁
+
+  [ ] 5. 新增個案管理頁面（v2 版）
+         · 完整個案資料（patients + patient_routes）
+         · 去程 / 回程路程分別設定
+         · 預設司機下拉選單（來自 drivers 表）
+         · 週次出席設定（週一～週日 checkbox）
+         · 搜尋：姓名 / 日照中心 / 狀態
+         路徑：新建 templates/cases_v2.html 或升級現有 cases.html
+
+  [ ] 6. 司機管理頁面
+         · 基本資料（姓名、電話、車號、車隊）
+         · 關聯帳號（users 表）
+         · 今日已排班數量顯示
+         路徑：新建 templates/drivers.html
+
+  ── Sprint 3（優化與擴充）──────────────────────────────────────
+
+  [ ] 7. 即時通知系統
+         · 班表異動自動通知相關司機（SSE push）
+         · 個案狀態變更通知日照中心
+         · 可考慮整合 LINE Notify 或 email
+
+  [ ] 8. 行動版介面優化
+         · 司機端：只顯示今日班表，大按鈕操作
+         · 離線支援（PWA Service Worker，儲存當日資料）
+         · 手機 GPS 自動取座標（上車 / 下車）
+
+  [ ] 9. 統計報表強化（v2 版）
+         · 改接 /api/v2/orders（正規化資料，查詢更精確）
+         · 新增：每月司機出勤統計
+         · 新增：每個案月服務次數
+         · 新增：距離 / 時間統計（distance_km / duration_min）
+         · 匯出 CSV / Excel 功能
+
+  [ ] 10. 刪除同步推送
+          · 偵測 deleted=TRUE AND dirty=TRUE 的記錄
+          · 呼叫 appsheet_client.delete_row() 推送至 AppSheet
+          · 刪除後清除 dirty
+
+  [ ] 11. AppSheet 拉取（緊急復原）
+          · 保留 /api/sync/pull 端點（目前已有 webhook）
+          · 允許從 AppSheet 強制覆蓋本機資料（資料遺失時復原用）
+
+  ── 長期規劃 ───────────────────────────────────────────────────
+
+  [ ] 12. 多租戶支援
+          · 不同日照機構使用同一套系統
+          · 資料隔離（center_id 分區）
+
+  [ ] 13. 排班最佳化
+          · 依司機路線、地理位置自動分配接送順序
+          · 減少空車里程
+
+  [ ] 14. 與政府長照系統介接
+          · 匯入 / 匯出符合長照給付格式的服務紀錄
+
+
+================================================================
+【技術決策記錄（ADR）】
+================================================================
+
+  ADR-001：以 Python Flask 取代 Classic ASP
+  ──────────────────────────────────────────
+  時間：2026-04-06
+  決策：捨棄 IIS + Classic ASP，改用 Python Flask（Port 8000）
+  原因：
+    · ASP 維護困難，套件生態萎縮
+    · Flask 可直接操作 PostgreSQL、呼叫 AppSheet API
+    · 前後端合一（Jinja2），減少部署複雜度
+  取捨：需要 Python 執行環境，但符合現有技術能力
+
+  ADR-002：保留 AppSheet 作為行動端入口
+  ──────────────────────────────────────
+  時間：2026-04-06
+  決策：不取代 AppSheet，改為本機系統與 AppSheet 雙向同步
+  原因：
+    · 司機端已習慣使用 AppSheet 行動版
+    · AppSheet 有完善的離線支援
+    · 本機系統負責管理、統計、複雜業務邏輯
+  取捨：需維護兩端同步，增加複雜度
+
+  ADR-003：同步方向改為推送（Pull → Push）
+  ─────────────────────────────────────────
+  時間：2026-04-11
+  決策：移除每 30 秒自動拉取，改為手動推送
+  原因：
+    · 自動拉取會覆蓋本機的變更（資料競爭）
+    · 本機是主資料來源，AppSheet 是展示 / 行動端
+    · dirty 旗標提供更精準的同步控制
+  取捨：AppSheet 端的變更不會自動同步到本機
+
+  ADR-004：資料庫正規化（JSONB → 關聯式）
+  ─────────────────────────────────────────
+  時間：2026-04-11
+  決策：將 JSONB records 表正規化為 11 張關聯式資料表
+  原因：
+    · JSONB 無法做 JOIN 查詢、外鍵約束
+    · 個案資料結構複雜（人 + 多路程），需要拆表
+    · 角色權限系統需要正規化結構
+  取捨：需要遷移腳本，舊版 API 並行維護一段時間
+
+  ADR-005：保留舊版 JSONB API 向下相容
+  ─────────────────────────────────────
+  時間：2026-04-12
+  決策：/api/<table> 舊版路由繼續運作，新功能使用 /api/v2/*
+  原因：
+    · 現有前端頁面仍依賴舊版 API
+    · 逐步遷移比一次性切換風險低
+  計畫：等 Sprint 1 完成後逐步廢棄舊版路由
+
+
+================================================================
+【環境資訊】
+================================================================
+
+  主機
+  ────
+    OS：Windows 10（版本 10.0.26200）
+    Python：3.14.4
+    PostgreSQL：17
+    Flask：3.x / Werkzeug 3.1.8
+
+  資料庫連線（config.py）
+  ──────────────────────
+    Host：localhost:5432
+    DB：rizhaodb
+    User：postgres
+
+  AppSheet
+  ────────
+    App ID：fe122f99-e044-464c-9531-894598ba46c8
+    API：https://api.appsheet.com/api/v2/apps/{id}/tables
+
+  備份
+  ────
+    rizhaodb_backup_20260412.sql — 資料庫快照（遷移前）
+
+
+================================================================
+  最後更新：2026-04-12
+  作者：系統管理員
+================================================================

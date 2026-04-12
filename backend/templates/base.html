@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>日照接送管理系統</title>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --primary:#2563eb;--primary-d:#1d4ed8;
+  --sidebar:#0f172a;--sw:220px;--th:56px;
+  --text:#1e293b;--muted:#64748b;--border:#e2e8f0;
+  --bg:#f1f5f9;--card:#fff;
+  --ok:#059669;--warn:#d97706;--err:#dc2626;
+  --r:8px;
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);display:flex;flex-direction:column;height:100vh;overflow:hidden;}
+#topbar{height:var(--th);background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 20px;gap:12px;z-index:100;flex-shrink:0;}
+#topbar h1{font-size:16px;font-weight:700;color:var(--primary);flex:1;white-space:nowrap;}
+#sync-wrap{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);}
+#sync-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);transition:background .3s;}
+#sync-dot.ok{background:var(--ok);}
+#sync-dot.syncing{background:var(--warn);animation:pulse 1s infinite;}
+#sync-dot.error{background:var(--err);}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.topbtn{display:flex;align-items:center;gap:4px;padding:6px 14px;background:var(--primary);color:#fff;border:none;border-radius:var(--r);font-size:13px;cursor:pointer;transition:background .2s;}
+.topbtn:hover{background:var(--primary-d);}
+.topbtn:disabled{opacity:.6;cursor:not-allowed;}
+#layout{display:flex;flex:1;overflow:hidden;}
+#sidebar{width:var(--sw);background:var(--sidebar);display:flex;flex-direction:column;overflow-y:auto;flex-shrink:0;}
+.s-section{padding:12px 8px 4px;font-size:10px;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.08em;}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;margin:1px 6px;border-radius:6px;cursor:pointer;color:#94a3b8;font-size:13px;transition:all .15s;text-decoration:none;user-select:none;}
+.nav-item:hover{background:#1e293b;color:#e2e8f0;}
+.nav-item.active{background:var(--primary);color:#fff;}
+.nav-item .material-icons{font-size:18px;}
+.nav-badge{margin-left:auto;background:rgba(255,255,255,.15);padding:1px 7px;border-radius:20px;font-size:11px;min-width:22px;text-align:center;}
+.nav-item.active .nav-badge{background:rgba(255,255,255,.25);}
+#main{flex:1;overflow-y:auto;padding:24px;}
+.page-title{font-size:20px;font-weight:700;margin-bottom:20px;color:var(--text);display:flex;align-items:center;gap:8px;}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;margin-bottom:28px;}
+.stat-card{background:var(--card);border-radius:var(--r);padding:20px;border:1px solid var(--border);cursor:pointer;transition:box-shadow .2s,transform .15s;display:flex;flex-direction:column;gap:8px;}
+.stat-card:hover{box-shadow:0 4px 16px rgba(0,0,0,.08);transform:translateY(-1px);}
+.stat-top{display:flex;align-items:center;justify-content:space-between;}
+.stat-icon{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;}
+.stat-count{font-size:32px;font-weight:800;line-height:1;}
+.stat-label{font-size:13px;color:var(--muted);}
+.stat-desc{font-size:12px;color:var(--muted);}
+.tbl-header{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;}
+.search-box{display:flex;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:6px 12px;gap:6px;flex:1;min-width:200px;max-width:380px;}
+.search-box input{border:none;outline:none;font-size:13px;width:100%;background:transparent;}
+.search-box .material-icons{font-size:18px;color:var(--muted);}
+.btn{display:inline-flex;align-items:center;gap:4px;padding:7px 16px;border-radius:var(--r);border:none;font-size:13px;cursor:pointer;transition:all .15s;font-weight:500;}
+.btn-primary{background:var(--primary);color:#fff;}
+.btn-primary:hover{background:var(--primary-d);}
+.btn-danger{background:var(--err);color:#fff;}
+.btn-danger:hover{background:#b91c1c;}
+.btn-ghost{background:transparent;color:var(--text);border:1px solid var(--border);}
+.btn-ghost:hover{background:var(--bg);}
+.data-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;}
+.tbl-wrap{overflow-x:auto;}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+thead th{background:#f8fafc;padding:10px 14px;text-align:left;font-weight:600;color:var(--muted);white-space:nowrap;border-bottom:1px solid var(--border);font-size:12px;}
+tbody tr{cursor:pointer;transition:background .1s;}
+tbody tr:hover{background:#f8fafc;}
+tbody tr+tr{border-top:1px solid var(--border);}
+tbody td{padding:10px 14px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tbl-footer{padding:10px 14px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);display:flex;align-items:center;justify-content:space-between;}
+.badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:500;}
+.bg-green{background:#dcfce7;color:#166534;}
+.bg-red{background:#fee2e2;color:#991b1b;}
+.bg-yellow{background:#fef3c7;color:#92400e;}
+.bg-blue{background:#dbeafe;color:#1e40af;}
+.bg-gray{background:#f1f5f9;color:#475569;}
+#overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:200;align-items:center;justify-content:center;}
+#overlay.open{display:flex;}
+#modal{background:var(--card);border-radius:12px;width:640px;max-width:95vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25);}
+#modal-head{display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid var(--border);flex-shrink:0;}
+#modal-title{font-weight:700;font-size:15px;flex:1;}
+#modal-x{background:none;border:none;cursor:pointer;color:var(--muted);font-size:20px;padding:2px;border-radius:4px;}
+#modal-x:hover{color:var(--text);}
+#modal-body{padding:20px;overflow-y:auto;flex:1;}
+#modal-foot{padding:14px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;flex-shrink:0;}
+.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+.fg{display:flex;flex-direction:column;gap:4px;}
+.fg.full{grid-column:1/-1;}
+.fl{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;}
+.fv{font-size:13px;color:var(--text);word-break:break-word;}
+.fi{border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:13px;width:100%;outline:none;transition:border-color .15s;}
+.fi:focus{border-color:var(--primary);}
+.log-tbl{width:100%;border-collapse:collapse;font-size:12px;}
+.log-tbl th{text-align:left;padding:6px 10px;color:var(--muted);font-weight:600;border-bottom:1px solid var(--border);}
+.log-tbl td{padding:6px 10px;border-bottom:1px solid var(--border);}
+.c-ok{color:var(--ok);}
+.c-err{color:var(--err);}
+#toasts{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:8px;z-index:300;}
+.toast{padding:12px 18px;border-radius:var(--r);font-size:13px;font-weight:500;color:#fff;box-shadow:0 4px 16px rgba(0,0,0,.15);animation:sli .25s ease;max-width:320px;}
+.t-ok{background:var(--ok);}
+.t-err{background:var(--err);}
+.t-info{background:var(--primary);}
+@keyframes sli{from{transform:translateX(120%);opacity:0}to{transform:translateX(0);opacity:1}}
+.empty{text-align:center;padding:60px 20px;color:var(--muted);}
+.empty .material-icons{font-size:48px;margin-bottom:12px;display:block;}
+::-webkit-scrollbar{width:6px;height:6px;}
+::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px;}
+</style>
+{% block extra_head %}{% endblock %}
+</head>
+<body>
+
+<div id="topbar">
+  <h1><span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">directions_bus</span>日照接送管理系統</h1>
+  <div id="sync-wrap">
+    <div id="sync-dot"></div>
+    <span id="sync-label">未同步</span>
+  </div>
+  <button class="topbtn" id="sync-btn" onclick="triggerSync()">
+    <span class="material-icons" style="font-size:16px;">sync</span>立即同步
+  </button>
+</div>
+
+<div id="layout">
+  <nav id="sidebar">
+    <div class="s-section">主頁</div>
+    <a href="/" class="nav-item {% if current_page == 'index' %}active{% endif %}">
+      <span class="material-icons">dashboard</span>總覽
+    </a>
+
+    <div class="s-section">視圖</div>
+    <a href="/today" class="nav-item {% if current_page == 'today' %}active{% endif %}">
+      <span class="material-icons">today</span>今日班表
+    </a>
+    <a href="/schedule" class="nav-item {% if current_page == 'schedule' %}active{% endif %}">
+      <span class="material-icons">calendar_month</span>班表總表
+    </a>
+    <a href="/map" class="nav-item {% if current_page == 'map' %}active{% endif %}">
+      <span class="material-icons">map</span>路線圖
+    </a>
+    <a href="/stats" class="nav-item {% if current_page == 'stats' %}active{% endif %}">
+      <span class="material-icons">bar_chart</span>服務統計
+    </a>
+    <a href="/cases" class="nav-item {% if current_page == 'cases' %}active{% endif %}">
+      <span class="material-icons">people</span>個案管理
+    </a>
+
+    <div class="s-section">資料表</div>
+    <div id="sidebar-tables">
+      {% for t in tables %}
+      <a href="/table/{{ t.name | urlencode }}" class="nav-item {% if current_page == 'table' and current_table == t.name %}active{% endif %}">
+        <span class="material-icons">{{ t.icon }}</span>
+        {{ t.label }}
+        <span class="nav-badge">{{ t.count }}</span>
+      </a>
+      {% else %}
+      <div style="padding:8px 14px;font-size:12px;color:#475569;">載入中...</div>
+      {% endfor %}
+    </div>
+
+    <div class="s-section">系統</div>
+    <a href="/synclog" class="nav-item {% if current_page == 'synclog' %}active{% endif %}">
+      <span class="material-icons">history</span>同步紀錄
+    </a>
+  </nav>
+
+  <main id="main">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+<!-- Modal overlay -->
+<div id="overlay" onclick="closeModal(event)">
+  <div id="modal">
+    <div id="modal-head">
+      <span class="material-icons" id="modal-icon" style="color:var(--primary)">info</span>
+      <div id="modal-title">詳細資料</div>
+      <button id="modal-x" onclick="closeModal()">&#10005;</button>
+    </div>
+    <div id="modal-body"></div>
+    <div id="modal-foot" id="modal-foot"></div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div id="toasts"></div>
+
+<script>
+const API = "";
+const TABLES = {{ tables | tojson }};
+const CURRENT_TABLE = {{ current_table | default("") | tojson }};
+const CURRENT_PAGE = {{ current_page | tojson }};
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+
+function esc(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+function fmtTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  if (isNaN(d)) return ts;
+  return d.toLocaleString('zh-TW', {
+    year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', second:'2-digit'
+  });
+}
+
+function statusBadge(status) {
+  const map = {
+    '完成':    'bg-green',
+    '已完成':  'bg-green',
+    '正常':    'bg-green',
+    '進行中':  'bg-blue',
+    '待接送':  'bg-blue',
+    '請假':    'bg-yellow',
+    '暫停':    'bg-yellow',
+    '取消':    'bg-red',
+    '異常':    'bg-red',
+  };
+  const cls = map[status] || 'bg-gray';
+  return `<span class="badge ${cls}">${esc(status)}</span>`;
+}
+
+function toast(msg, type='info') {
+  const cls = type === 'ok' ? 't-ok' : type === 'err' ? 't-err' : 't-info';
+  const el = document.createElement('div');
+  el.className = `toast ${cls}`;
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+// ── Sync ─────────────────────────────────────────────────────────────────────
+
+function setSyncDot(state, label) {
+  const dot = document.getElementById('sync-dot');
+  const lbl = document.getElementById('sync-label');
+  dot.className = state; // ok | syncing | error | ''
+  if (label) lbl.textContent = label;
+}
+
+async function triggerSync() {
+  const btn = document.getElementById('sync-btn');
+  btn.disabled = true;
+  setSyncDot('syncing', '同步中…');
+  try {
+    const r = await fetch(`${API}/api/sync/trigger`, { method: 'POST' });
+    if (r.ok) {
+      toast('同步已觸發', 'info');
+    } else {
+      const e = await r.json().catch(() => ({}));
+      toast(e.error || '同步失敗', 'err');
+      setSyncDot('error', '同步失敗');
+    }
+  } catch (err) {
+    toast('網路錯誤', 'err');
+    setSyncDot('error', '網路錯誤');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ── SSE ──────────────────────────────────────────────────────────────────────
+
+let _sseSource = null;
+let _sseRetry = 1000;
+
+function connectSSE() {
+  if (_sseSource) { _sseSource.close(); _sseSource = null; }
+  _sseSource = new EventSource(`${API}/events`);
+
+  // ── 統一用 onmessage 接收，依 type 分發 ──────────────────────────────────
+  _sseSource.onmessage = (e) => {
+    let data;
+    try { data = JSON.parse(e.data); } catch(_) { return; }
+    const type = data.type || '';
+
+    // 分發成 document 自訂事件，讓各頁面可自行監聽 sse:<type>
+    document.dispatchEvent(new CustomEvent(`sse:${type}`, { detail: data }));
+
+    // ── Topbar 狀態（共用） ─────────────────────────────────────────────────
+    if (type === 'sync_start') {
+      setSyncDot('syncing', '同步中…');
+      const btn = document.getElementById('sync-btn');
+      if (btn) btn.disabled = true;
+    }
+
+    else if (type === 'sync_progress') {
+      const pct = data.percent !== undefined ? `${data.percent}%` : '';
+      setSyncDot('syncing', pct ? `同步中 ${pct}` : '同步中…');
+    }
+
+    else if (type === 'sync_complete') {
+      _sseRetry = 1000;
+      const ts = data.timestamp ? fmtTime(data.timestamp) : '';
+      setSyncDot('ok', ts ? `同步完成 ${ts}` : '同步完成');
+      const btn = document.getElementById('sync-btn');
+      if (btn) btn.disabled = false;
+      refreshSidebar();
+      if (typeof onSyncComplete === 'function') onSyncComplete();
+    }
+
+    else if (type === 'sync_table_done') {
+      refreshSidebar();
+    }
+
+    else if (type === 'sync_error') {
+      setSyncDot('error', '同步失敗');
+      const btn = document.getElementById('sync-btn');
+      if (btn) btn.disabled = false;
+      toast(data.error || '同步錯誤', 'err');
+    }
+  };
+
+  _sseSource.onerror = () => {
+    _sseSource.close();
+    _sseSource = null;
+    setSyncDot('', '連線中斷');
+    setTimeout(connectSSE, _sseRetry);
+    _sseRetry = Math.min(_sseRetry * 2, 30000);
+  };
+
+  _sseSource.onopen = () => {
+    _sseRetry = 1000;
+    setSyncDot('ok', '已連線');
+  };
+}
+
+// ── Sidebar tables refresh ────────────────────────────────────────────────────
+
+async function refreshSidebar() {
+  try {
+    const r = await fetch(`${API}/api/tables`);
+    if (!r.ok) return;
+    const data = await r.json();
+    const container = document.getElementById('sidebar-tables');
+    if (!container) return;
+    container.innerHTML = data.map(t => {
+      const active = (CURRENT_PAGE === 'table' && CURRENT_TABLE === t.name) ? 'active' : '';
+      return `<a href="/table/${encodeURIComponent(t.name)}" class="nav-item ${active}">
+        <span class="material-icons">${esc(t.icon)}</span>
+        ${esc(t.label)}
+        <span class="nav-badge">${t.count ?? ''}</span>
+      </a>`;
+    }).join('');
+  } catch(_) {}
+}
+
+// ── Modal system ──────────────────────────────────────────────────────────────
+
+let _modalTable = '';
+let _modalKey = '';
+let _modalMode = 'view'; // 'view' | 'edit' | 'add'
+let _modalRecord = {};
+let _modalFields = [];
+
+function openRecord(tableName, key) {
+  _modalTable = tableName;
+  _modalKey = key;
+  _modalMode = 'view';
+  _loadRecord(tableName, key);
+}
+
+async function openAddModal(tableName) {
+  _modalTable = tableName;
+  _modalKey   = '';
+  _modalMode  = 'add';
+  _modalRecord = {};
+  _modalFields = [];
+
+  const overlay = document.getElementById('overlay');
+  const body    = document.getElementById('modal-body');
+  const foot    = document.getElementById('modal-foot');
+  const title   = document.getElementById('modal-title');
+  const iconEl  = document.getElementById('modal-icon');
+  const tbl     = TABLES.find(t => t.name === tableName) || {};
+
+  title.textContent  = `新增 — ${tbl.label || tableName}`;
+  iconEl.textContent = tbl.icon  || 'add';
+  iconEl.style.color = tbl.color || 'var(--primary)';
+  body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">載入欄位結構…</div>';
+  foot.innerHTML = `<button class="btn btn-ghost" onclick="closeModal()">取消</button>
+    <button class="btn btn-primary" onclick="saveRecord()">
+      <span class="material-icons" style="font-size:15px">save</span>儲存
+    </button>`;
+  overlay.classList.add('open');
+
+  // 從第一筆記錄取得欄位結構
+  try {
+    const r = await fetch(`${API}/api/${encodeURIComponent(tableName)}`);
+    if (r.ok) {
+      const data = await r.json();
+      if (data && data.length > 0) {
+        _modalFields = Object.keys(data[0]).filter(f => f !== '_RowNumber' && !f.startsWith('Related'));
+      }
+    }
+  } catch(_) {}
+
+  // 若完全取不到欄位，至少用空白表單提示
+  if (_modalFields.length === 0) {
+    body.innerHTML = '<div class="empty"><span class="material-icons">info</span>無法取得欄位結構，請先確認資料表有資料</div>';
+    return;
+  }
+  _renderModal('add');
+}
+
+async function _loadRecord(tableName, key) {
+  const overlay = document.getElementById('overlay');
+  const body = document.getElementById('modal-body');
+  body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">載入中…</div>';
+  overlay.classList.add('open');
+
+  try {
+    const r = await fetch(`${API}/api/${encodeURIComponent(tableName)}/${encodeURIComponent(key)}`);
+    if (!r.ok) throw new Error('載入失敗');
+    const data = await r.json();
+    // 後端直接回傳記錄物件（非 {record, fields} 格式）
+    _modalRecord = data.record ?? data;
+    _modalFields = data.fields ?? Object.keys(_modalRecord).filter(f => f !== '_RowNumber' && !f.startsWith('Related'));
+    _renderModal('view');
+  } catch(err) {
+    body.innerHTML = `<div class="empty"><span class="material-icons">error_outline</span>載入失敗</div>`;
+  }
+}
+
+function _renderModal(mode) {
+  _modalMode = mode;
+  const tbl = TABLES.find(t => t.name === _modalTable) || {};
+  document.getElementById('modal-title').textContent = mode === 'edit'
+    ? `編輯 — ${tbl.label || _modalTable}`
+    : mode === 'add'
+    ? `新增 — ${tbl.label || _modalTable}`
+    : (tbl.label || _modalTable);
+
+  const iconEl = document.getElementById('modal-icon');
+  iconEl.textContent = tbl.icon || 'table_rows';
+  iconEl.style.color = tbl.color || 'var(--primary)';
+
+  const body = document.getElementById('modal-body');
+  const foot = document.getElementById('modal-foot');
+
+  const fields = _modalFields.filter(f => f !== '_RowNumber' && !f.startsWith('Related'));
+
+  if (mode === 'view') {
+    body.innerHTML = `<div class="field-grid">${
+      fields.map(f => `
+        <div class="fg ${f.length > 8 ? 'full' : ''}">
+          <div class="fl">${esc(f)}</div>
+          <div class="fv">${esc(_modalRecord[f] ?? '—')}</div>
+        </div>`).join('')
+    }</div>`;
+    foot.innerHTML = `
+      <button class="btn btn-danger" onclick="deleteRecord()">
+        <span class="material-icons" style="font-size:15px">delete</span>刪除
+      </button>
+      <button class="btn btn-ghost" onclick="closeModal()">關閉</button>
+      <button class="btn btn-primary" onclick="_renderModal('edit')">
+        <span class="material-icons" style="font-size:15px">edit</span>編輯
+      </button>`;
+  } else {
+    // edit / add
+    body.innerHTML = `<div class="field-grid">${
+      fields.map(f => `
+        <div class="fg ${f.length > 8 ? 'full' : ''}">
+          <label class="fl" for="fi-${esc(f)}">${esc(f)}</label>
+          <input class="fi" id="fi-${esc(f)}" value="${esc(_modalRecord[f] ?? '')}" placeholder="${esc(f)}">
+        </div>`).join('')
+    }</div>`;
+    foot.innerHTML = `
+      <button class="btn btn-ghost" onclick="${mode === 'edit' ? "_renderModal('view')" : 'closeModal()'}">取消</button>
+      <button class="btn btn-primary" onclick="saveRecord()">
+        <span class="material-icons" style="font-size:15px">save</span>儲存
+      </button>`;
+  }
+}
+
+function _renderModalAdd(tbl) {
+  const title = document.getElementById('modal-title');
+  const iconEl = document.getElementById('modal-icon');
+  const body = document.getElementById('modal-body');
+  const foot = document.getElementById('modal-foot');
+
+  title.textContent = `新增 — ${tbl ? tbl.label : _modalTable}`;
+  iconEl.textContent = tbl ? tbl.icon : 'add';
+  iconEl.style.color = tbl ? tbl.color : 'var(--primary)';
+  body.innerHTML = '<div class="empty"><span class="material-icons">info</span>請先載入欄位結構</div>';
+  foot.innerHTML = `<button class="btn btn-ghost" onclick="closeModal()">取消</button>
+    <button class="btn btn-primary" onclick="saveRecord()"><span class="material-icons" style="font-size:15px">save</span>儲存</button>`;
+}
+
+async function saveRecord() {
+  const fields = _modalFields.filter(f => f !== '_RowNumber' && !f.startsWith('Related'));
+  const payload = {};
+  fields.forEach(f => {
+    const el = document.getElementById(`fi-${f}`);
+    if (el) payload[f] = el.value;
+  });
+
+  const url = _modalMode === 'add'
+    ? `${API}/api/${encodeURIComponent(_modalTable)}`
+    : `${API}/api/${encodeURIComponent(_modalTable)}/${encodeURIComponent(_modalKey)}`;
+  const method = _modalMode === 'add' ? 'POST' : 'PUT';
+
+  try {
+    const r = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (r.ok) {
+      toast(_modalMode === 'add' ? '已新增' : '已儲存', 'ok');
+      closeModal();
+      if (typeof onSyncComplete === 'function') onSyncComplete();
+    } else {
+      const e = await r.json().catch(() => ({}));
+      toast(e.error || '儲存失敗', 'err');
+    }
+  } catch(_) {
+    toast('網路錯誤', 'err');
+  }
+}
+
+async function deleteRecord() {
+  if (!confirm(`確定要刪除此筆資料？`)) return;
+  try {
+    const r = await fetch(
+      `${API}/api/${encodeURIComponent(_modalTable)}/${encodeURIComponent(_modalKey)}`,
+      { method: 'DELETE' }
+    );
+    if (r.ok) {
+      toast('已刪除', 'ok');
+      closeModal();
+      if (typeof onSyncComplete === 'function') onSyncComplete();
+    } else {
+      const e = await r.json().catch(() => ({}));
+      toast(e.error || '刪除失敗', 'err');
+    }
+  } catch(_) {
+    toast('網路錯誤', 'err');
+  }
+}
+
+function closeModal(e) {
+  if (e && e.target !== document.getElementById('overlay')) return;
+  document.getElementById('overlay').classList.remove('open');
+  _modalRecord = {};
+  _modalKey = '';
+}
+
+// Close on Escape
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeModal();
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+connectSSE();
+</script>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

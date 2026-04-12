@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<style>
+.table-icon-badge{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;flex-shrink:0;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-title">
+  <div class="table-icon-badge" style="background:{{ cfg.color | default('#2563eb') }}">
+    <span class="material-icons">{{ cfg.icon | default('table_rows') }}</span>
+  </div>
+  {{ cfg.label | default(table_name) }}
+  <span style="font-size:14px;font-weight:400;color:var(--muted);margin-left:4px;" id="rec-count">
+    ({{ records | length }} 筆)
+  </span>
+</div>
+
+<div class="tbl-header">
+  <div class="search-box">
+    <span class="material-icons">search</span>
+    <input type="text" id="tbl-search" placeholder="搜尋…" oninput="filterTable()">
+  </div>
+  <button class="btn btn-ghost" onclick="filterTable()">
+    <span class="material-icons" style="font-size:15px">refresh</span>重新整理
+  </button>
+  <button class="btn btn-primary" onclick="openAddModal({{ table_name | tojson }})">
+    <span class="material-icons" style="font-size:15px">add</span>新增
+  </button>
+</div>
+
+<div class="data-card">
+  <div class="tbl-wrap">
+    <table id="data-table">
+      <thead id="tbl-head">
+        <tr>
+          <!-- Columns rendered by JS -->
+        </tr>
+      </thead>
+      <tbody id="tbl-body">
+        <!-- Rows rendered by JS -->
+      </tbody>
+    </table>
+  </div>
+  <div class="tbl-footer">
+    <span id="tbl-footer">共 {{ records | length }} 筆</span>
+    <span style="color:var(--muted)">點擊列查看 / 編輯詳情</span>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const TABLE_NAME = {{ table_name | tojson }};
+const TABLE_CFG  = {{ cfg | tojson }};
+let _records     = {{ records | tojson }};
+let _cols        = [];
+
+// ── Determine columns ─────────────────────────────────────────────────────────
+
+function deriveColumns(records) {
+  if (!records || records.length === 0) return [];
+  const skip = new Set(['_RowNumber']);
+  const all = new Set();
+  records.forEach(r => Object.keys(r).forEach(k => all.add(k)));
+  // Filter hidden fields
+  const filtered = [...all].filter(k =>
+    !skip.has(k) && !k.startsWith('Related') && k !== '_key'
+  );
+  // Return first 8 columns
+  return filtered.slice(0, 8);
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+
+function renderTable(records) {
+  _cols = deriveColumns(records);
+
+  const head = document.getElementById('tbl-head');
+  const body = document.getElementById('tbl-body');
+  const footer = document.getElementById('tbl-footer');
+  const countEl = document.getElementById('rec-count');
+
+  // Header
+  head.innerHTML = `<tr>${_cols.map(c => `<th>${esc(c)}</th>`).join('')}<th style="width:50px;"></th></tr>`;
+
+  if (!records || records.length === 0) {
+    body.innerHTML = `<tr><td colspan="${_cols.length + 1}" class="empty">
+      <span class="material-icons">inbox</span>無資料
+    </td></tr>`;
+    if (footer)  footer.textContent  = '共 0 筆';
+    if (countEl) countEl.textContent = '(0 筆)';
+    return;
+  }
+
+  if (footer)  footer.textContent  = `共 ${records.length} 筆`;
+  if (countEl) countEl.textContent = `(${records.length} 筆)`;
+
+  body.innerHTML = records.map(r => {
+    const key = r['_key'] || r[Object.keys(r)[0]] || '';
+    const cells = _cols.map(col => {
+      const val = r[col];
+      if (val == null || val === '') return '<td>—</td>';
+      // Status badge detection
+      const statusWords = ['完成','請假','取消','正常','暫停','進行','待接','客上','客下','已完成','異常','結案'];
+      if (typeof val === 'string' && statusWords.some(w => val.includes(w))) {
+        return `<td>${statusBadge(val)}</td>`;
+      }
+      return `<td title="${esc(String(val))}">${esc(String(val))}</td>`;
+    }).join('');
+
+    return `<tr onclick="openRecord(${JSON.stringify(TABLE_NAME)}, ${JSON.stringify(key)})">
+      ${cells}
+      <td onclick="event.stopPropagation()" style="text-align:center;">
+        <button style="background:none;border:none;cursor:pointer;color:var(--muted);padding:4px;"
+          title="編輯" onclick="openRecord(${JSON.stringify(TABLE_NAME)}, ${JSON.stringify(key)})">
+          <span class="material-icons" style="font-size:16px">open_in_new</span>
+        </button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Filter ────────────────────────────────────────────────────────────────────
+
+function filterTable() {
+  const q = (document.getElementById('tbl-search').value || '').toLowerCase();
+  if (!q) {
+    renderTable(_records);
+    return;
+  }
+  const filtered = _records.filter(r => {
+    return Object.values(r).some(v => v != null && String(v).toLowerCase().includes(q));
+  });
+  renderTable(filtered);
+}
+
+// ── Live reload after sync ────────────────────────────────────────────────────
+
+async function onSyncComplete() {
+  try {
+    const r = await fetch(`${API}/api/${encodeURIComponent(TABLE_NAME)}`);
+    if (!r.ok) return;
+    _records = await r.json();
+    filterTable();
+    toast(`${TABLE_CFG.label || TABLE_NAME} 已更新`, 'ok');
+  } catch(_) {}
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+renderTable(_records);
+</script>
+{% endblock %}

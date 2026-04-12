@@ -1,0 +1,549 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<style>
+/* ── 同步管理區 ─────────────────────────────────────────── */
+.sync-mgr{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
+  margin-bottom:24px;overflow:hidden;}
+.sync-mgr-head{display:flex;align-items:center;justify-content:space-between;
+  padding:16px 20px;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:10px;}
+.sync-mgr-title{font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px;}
+.sync-mgr-title .material-icons{color:var(--primary);font-size:18px;}
+.sync-mgr-actions{display:flex;align-items:center;gap:10px;}
+
+/* ── 全域進度列 ────────────────────────────────────────── */
+#sync-progress-wrap{padding:14px 20px;border-bottom:1px solid var(--border);
+  display:none;background:#f0f9ff;}
+#sync-progress-wrap.visible{display:block;}
+.progress-header{display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:8px;font-size:13px;}
+.progress-label{font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px;}
+.progress-label .material-icons{font-size:16px;color:var(--primary);
+  animation:spin 1s linear infinite;}
+.progress-pct{font-weight:700;color:var(--primary);}
+.progress-bar-bg{height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;}
+.progress-bar-fill{height:100%;background:var(--primary);border-radius:4px;
+  transition:width .4s ease;width:0%;}
+.progress-table{font-size:12px;color:var(--muted);margin-top:6px;}
+
+/* ── 資料表卡片格 ──────────────────────────────────────── */
+.tables-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));
+  gap:0;padding:0;}
+.table-sync-card{padding:16px;border-bottom:1px solid var(--border);
+  border-right:1px solid var(--border);display:flex;flex-direction:column;gap:10px;
+  transition:background .15s;}
+.table-sync-card:hover{background:var(--bg);}
+.tsc-top{display:flex;align-items:center;gap:10px;}
+.tsc-icon{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;
+  justify-content:center;color:#fff;font-size:18px;flex-shrink:0;}
+.tsc-info{flex:1;min-width:0;}
+.tsc-name{font-size:13px;font-weight:600;color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tsc-desc{font-size:11px;color:var(--muted);}
+.tsc-stats{display:flex;align-items:center;justify-content:space-between;}
+.tsc-count{font-size:20px;font-weight:800;color:var(--primary);}
+.tsc-count.updating{animation:countFlash .6s ease;}
+@keyframes countFlash{0%,100%{opacity:1}50%{opacity:.3}}
+.tsc-time{font-size:11px;color:var(--muted);}
+.tsc-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.tsc-status{font-size:11px;display:flex;align-items:center;gap:4px;}
+.tsc-status.ok{color:var(--ok);}
+.tsc-status.err{color:var(--err);}
+.tsc-status.syncing{color:var(--primary);}
+.tsc-status .material-icons{font-size:13px;}
+.tsc-status .spin{animation:spin 1s linear infinite;}
+.btn-sync-table{display:flex;align-items:center;gap:4px;padding:4px 10px;
+  background:transparent;border:1px solid var(--border);border-radius:6px;
+  font-size:12px;cursor:pointer;color:var(--text);transition:all .15s;white-space:nowrap;}
+.btn-sync-table:hover{background:var(--primary);color:#fff;border-color:var(--primary);}
+.btn-sync-table:disabled{opacity:.5;cursor:not-allowed;}
+.btn-sync-table .material-icons{font-size:14px;}
+
+/* ── 摘要卡片 ──────────────────────────────────────────── */
+.sync-summary{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));
+  gap:14px;margin-bottom:24px;}
+.sync-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
+  padding:18px;}
+.sync-card-val{font-size:28px;font-weight:800;line-height:1;margin-bottom:6px;}
+.sync-card-label{font-size:12px;color:var(--muted);}
+
+/* ── 日誌表格 ──────────────────────────────────────────── */
+.section-title{font-size:15px;font-weight:700;margin-bottom:14px;
+  display:flex;align-items:center;gap:8px;}
+.section-title .material-icons{font-size:18px;color:var(--primary);}
+.log-row-ok td{color:var(--text);}
+.log-row-err td{color:var(--err);}
+.syncing-indicator{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;
+  background:#fef3c7;border:1px solid #fde68a;border-radius:var(--r);
+  font-size:13px;color:#92400e;margin-bottom:20px;}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-title">
+  <span class="material-icons">sync</span>同步管理
+</div>
+
+<!-- ═══════════════════════════════════════════
+     資料表同步管理區
+════════════════════════════════════════════ -->
+<div class="sync-mgr">
+
+  <!-- Header -->
+  <div class="sync-mgr-head">
+    <div class="sync-mgr-title">
+      <span class="material-icons">cloud_upload</span>
+      推送同步（本機 → AppSheet）
+      <span style="font-size:12px;color:var(--muted);font-weight:400;">
+        — 點選「推送」可將本機變更上傳至 AppSheet
+      </span>
+    </div>
+    <div class="sync-mgr-actions">
+      <span id="mgr-last-time" style="font-size:12px;color:var(--muted);">
+        {% set last_log = sync_status.logs[0] if sync_status.logs else none %}
+        {% if last_log %}最後推送：{{ last_log.synced_at }}{% endif %}
+      </span>
+      <button class="btn btn-primary" id="btn-sync-all" onclick="syncAll()">
+        <span class="material-icons" style="font-size:15px">cloud_upload</span>全部推送
+      </button>
+    </div>
+  </div>
+
+  <!-- 全域進度列 -->
+  <div id="sync-progress-wrap">
+    <div class="progress-header">
+      <div class="progress-label">
+        <span class="material-icons">sync</span>
+        <span id="progress-table-name">同步中…</span>
+      </div>
+      <span class="progress-pct" id="progress-pct">0%</span>
+    </div>
+    <div class="progress-bar-bg">
+      <div class="progress-bar-fill" id="progress-bar"></div>
+    </div>
+    <div class="progress-table" id="progress-detail"></div>
+  </div>
+
+  <!-- 資料表卡片 -->
+  <div class="tables-grid" id="tables-grid">
+    {% for tbl in tables %}
+    {# 取最新 log #}
+    {% set last_log = namespace(obj=none) %}
+    {% for lg in (sync_status.logs or []) %}
+      {% if lg.table_name == tbl.name and last_log.obj is none %}
+        {% set last_log.obj = lg %}
+      {% endif %}
+    {% endfor %}
+    <div class="table-sync-card" id="tsc-{{ loop.index }}" data-table="{{ tbl.name }}">
+      <div class="tsc-top">
+        <div class="tsc-icon" style="background:{{ tbl.color }}">
+          <span class="material-icons" style="font-size:18px">{{ tbl.icon }}</span>
+        </div>
+        <div class="tsc-info">
+          <div class="tsc-name" title="{{ tbl.name }}">{{ tbl.label }}</div>
+          <div class="tsc-desc">{{ tbl.desc }}</div>
+        </div>
+      </div>
+      <div class="tsc-stats">
+        <div class="tsc-count" id="tsc-count-{{ loop.index }}">
+          {{ tbl.count }}
+        </div>
+        <div class="tsc-time" id="tsc-time-{{ loop.index }}">
+          {% if last_log.obj %}
+            {{ last_log.obj.synced_at }}
+          {% else %}
+            —
+          {% endif %}
+        </div>
+      </div>
+      <div class="tsc-footer">
+        <div class="tsc-status ok" id="tsc-status-{{ loop.index }}">
+          {% if last_log.obj and last_log.obj.error %}
+            <span class="material-icons">error_outline</span>{{ last_log.obj.error[:30] }}
+          {% else %}
+            <span class="material-icons">check_circle</span>已同步
+          {% endif %}
+        </div>
+        <button class="btn-sync-table" id="tsc-btn-{{ loop.index }}"
+          onclick="syncTable('{{ tbl.name }}', {{ loop.index }})">
+          <span class="material-icons">cloud_upload</span>推送
+        </button>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     推送摘要
+════════════════════════════════════════════ -->
+{# 計算 dirty 總數 #}
+{% set dirty = sync_status.dirtyCount or {} %}
+{% set total_dirty = (dirty.get('centers',0) + dirty.get('drivers',0) +
+                      dirty.get('patients',0) + dirty.get('patient_routes',0) +
+                      dirty.get('orders',0)) %}
+<div class="sync-summary">
+  <div class="sync-card">
+    <div class="sync-card-val" id="ss-dirty-count"
+      style="color:{% if total_dirty > 0 %}var(--warn,#f59e0b){% else %}var(--ok){% endif %}">
+      {{ total_dirty }}
+    </div>
+    <div class="sync-card-label">待推送筆數</div>
+  </div>
+  <div class="sync-card">
+    <div class="sync-card-val" id="ss-last-sync" style="font-size:14px;line-height:1.4;">
+      {% set last_log = sync_status.logs[0] if sync_status.logs else none %}
+      {% if last_log %}{{ last_log.synced_at }}{% else %}尚未推送{% endif %}
+    </div>
+    <div class="sync-card-label">最後推送時間</div>
+  </div>
+  <div class="sync-card">
+    <div class="sync-card-val" id="ss-total-rows">
+      {{ sync_status.logs | map(attribute='rows_pushed') | select | sum if sync_status.logs else 0 }}
+    </div>
+    <div class="sync-card-label">歷史推送總筆數</div>
+  </div>
+  <div class="sync-card">
+    <div class="sync-card-val" id="ss-error-count"
+      style="color:{% if sync_status.logs | selectattr('error') | list %}var(--err){% else %}var(--ok){% endif %}">
+      {{ sync_status.logs | selectattr('error') | list | length if sync_status.logs else 0 }}
+    </div>
+    <div class="sync-card-label">錯誤次數</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     同步日誌
+════════════════════════════════════════════ -->
+<div class="data-card">
+  <div style="padding:16px 20px;border-bottom:1px solid var(--border);
+    display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+    <div class="section-title" style="margin-bottom:0;">
+      <span class="material-icons">receipt_long</span>同步日誌
+    </div>
+    <button class="btn btn-ghost" onclick="refreshLog()">
+      <span class="material-icons" style="font-size:15px">refresh</span>重新整理
+    </button>
+  </div>
+  <div class="tbl-wrap">
+    <table class="log-tbl" id="log-table">
+      <thead>
+        <tr>
+          <th>時間</th>
+          <th>資料表</th>
+          <th>方向</th>
+          <th>推送筆數</th>
+          <th>狀態</th>
+        </tr>
+      </thead>
+      <tbody id="log-body">
+        {% for log in sync_status.logs %}
+        <tr class="{{ 'log-row-err' if log.error else 'log-row-ok' }}">
+          <td class="ts-cell" data-ts="{{ log.synced_at }}">{{ log.synced_at }}</td>
+          <td>{{ log.table_name | default('—') }}</td>
+          <td>{{ '↑ 推送' if log.direction == 'push' else '↓ 拉取' }}</td>
+          <td>{{ log.rows_pushed if log.rows_pushed is not none else '—' }}</td>
+          <td>
+            {% if log.error %}
+              <span class="c-err">
+                <span class="material-icons" style="font-size:13px;vertical-align:middle">error_outline</span>
+                {{ log.error }}
+              </span>
+            {% else %}
+              <span class="c-ok">
+                <span class="material-icons" style="font-size:13px;vertical-align:middle">check_circle</span>
+                成功
+              </span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="5" class="empty">
+            <span class="material-icons">history_toggle_off</span>尚無推送紀錄
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="tbl-footer">
+    <span id="log-footer">共 {{ sync_status.logs | length if sync_status.logs else 0 }} 筆記錄</span>
+    <span style="color:var(--muted)">最新在上</span>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── 資料表 index map (name → card index) ────────────────────────────────────
+const TABLE_INDEX = {};
+document.querySelectorAll('.table-sync-card').forEach(card => {
+  const name = card.dataset.table;
+  const idx  = card.id.replace('tsc-', '');
+  if (name && idx) TABLE_INDEX[name] = idx;
+});
+
+// ── 單表同步 ─────────────────────────────────────────────────────────────────
+async function syncTable(tableName, idx) {
+  setCardSyncing(idx, true);
+  showProgress(tableName, 0, 1, 0);
+
+  try {
+    const r = await fetch(`${API}/api/sync/one/${encodeURIComponent(tableName)}`, { method: 'POST' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    // UI updates come via SSE (sync_progress / sync_table_done)
+  } catch(e) {
+    setCardError(idx, e.message);
+    hideProgress();
+    toast('同步失敗：' + e.message, 'err');
+  }
+}
+
+// ── 全部同步 ─────────────────────────────────────────────────────────────────
+function syncAll() {
+  triggerSync();  // from base.html
+}
+
+// ── 進度列控制 ───────────────────────────────────────────────────────────────
+function showProgress(table, done, total, pct) {
+  const wrap = document.getElementById('sync-progress-wrap');
+  wrap.classList.add('visible');
+  document.getElementById('progress-table-name').textContent =
+    `正在同步：${table}`;
+  document.getElementById('progress-pct').textContent = `${pct}%`;
+  document.getElementById('progress-bar').style.width = `${pct}%`;
+  document.getElementById('progress-detail').textContent =
+    total > 1 ? `第 ${done} / ${total} 個資料表` : '';
+}
+
+function hideProgress() {
+  setTimeout(() => {
+    const wrap = document.getElementById('sync-progress-wrap');
+    wrap.classList.remove('visible');
+    document.getElementById('progress-bar').style.width = '0%';
+  }, 800);
+}
+
+// ── 卡片狀態 ─────────────────────────────────────────────────────────────────
+function setCardSyncing(idx, isSyncing) {
+  const btn    = document.getElementById(`tsc-btn-${idx}`);
+  const status = document.getElementById(`tsc-status-${idx}`);
+  if (!btn || !status) return;
+  if (isSyncing) {
+    btn.disabled = true;
+    status.className = 'tsc-status syncing';
+    status.innerHTML = '<span class="material-icons spin">sync</span>同步中…';
+  } else {
+    btn.disabled = false;
+  }
+}
+
+function setCardDone(idx, tableName, count, timestamp) {
+  const countEl  = document.getElementById(`tsc-count-${idx}`);
+  const timeEl   = document.getElementById(`tsc-time-${idx}`);
+  const statusEl = document.getElementById(`tsc-status-${idx}`);
+  const btn      = document.getElementById(`tsc-btn-${idx}`);
+  if (countEl) {
+    countEl.textContent = count;
+    countEl.classList.add('updating');
+    setTimeout(() => countEl.classList.remove('updating'), 700);
+  }
+  if (timeEl && timestamp) timeEl.textContent = fmtTime(timestamp);
+  if (statusEl) {
+    statusEl.className = 'tsc-status ok';
+    statusEl.innerHTML = '<span class="material-icons">check_circle</span>同步成功';
+  }
+  if (btn) btn.disabled = false;
+}
+
+function setCardError(idx, errMsg) {
+  const statusEl = document.getElementById(`tsc-status-${idx}`);
+  const btn      = document.getElementById(`tsc-btn-${idx}`);
+  if (statusEl) {
+    statusEl.className = 'tsc-status err';
+    statusEl.innerHTML = `<span class="material-icons">error_outline</span>${esc(errMsg.slice(0,30))}`;
+  }
+  if (btn) btn.disabled = false;
+}
+
+// ── SSE 事件處理 ─────────────────────────────────────────────────────────────
+document.addEventListener('sse:sync_start', e => {
+  const { total, tables } = e.detail;
+  document.getElementById('btn-sync-all').disabled = true;
+  showProgress(tables[0] || '…', 0, total, 0);
+  // 全部卡片設為 syncing
+  tables.forEach(name => {
+    const idx = TABLE_INDEX[name];
+    if (idx) setCardSyncing(idx, true);
+  });
+});
+
+document.addEventListener('sse:sync_progress', e => {
+  const { table, done, total, percent, count, error } = e.detail;
+  const idx = TABLE_INDEX[table];
+
+  if (total > 1) {
+    showProgress(table, done, total, percent);
+  } else {
+    showProgress(table, done, total, percent);
+  }
+
+  // If this event carries a result (count or error), update card
+  if (idx && count !== undefined) {
+    setCardDone(idx, table, count, Date.now());
+  } else if (idx && error !== undefined) {
+    setCardError(idx, error);
+  }
+});
+
+document.addEventListener('sse:sync_table_done', e => {
+  const { table, count, error, timestamp } = e.detail;
+  const idx = TABLE_INDEX[table];
+  if (idx) {
+    if (error) setCardError(idx, error);
+    else setCardDone(idx, table, count, timestamp || Date.now());
+  }
+  hideProgress();
+  refreshLog();
+});
+
+document.addEventListener('sse:sync_complete', e => {
+  document.getElementById('btn-sync-all').disabled = false;
+  hideProgress();
+  // Update summary
+  const data = e.detail;
+  if (data.results) {
+    const total = Object.values(data.results).reduce((s,v) => s + (v||0), 0);
+    const ssTotal = document.getElementById('ss-total-rows');
+    const ssCount = document.getElementById('ss-table-count');
+    const ssLast  = document.getElementById('ss-last-sync');
+    const mgrLast = document.getElementById('mgr-last-time');
+    if (ssTotal) ssTotal.textContent = total;
+    if (ssCount) ssCount.textContent = Object.keys(data.results).length;
+    if (data.timestamp) {
+      const t = fmtTime(data.timestamp);
+      if (ssLast)  ssLast.textContent  = t;
+      if (mgrLast) mgrLast.textContent = `最後同步：${t}`;
+    }
+    // Update each card count
+    Object.entries(data.results).forEach(([name, count]) => {
+      const idx = TABLE_INDEX[name];
+      if (idx) {
+        const el = document.getElementById(`tsc-count-${idx}`);
+        if (el) el.textContent = count;
+        const btn = document.getElementById(`tsc-btn-${idx}`);
+        if (btn) btn.disabled = false;
+      }
+    });
+  }
+  refreshLog();
+  toast('同步完成', 'ok');
+});
+
+// ── 重新整理日誌 ─────────────────────────────────────────────────────────────
+async function refreshLog() {
+  try {
+    const r = await fetch(`${API}/api/sync/status`);
+    if (!r.ok) throw new Error();
+    const data = await r.json();
+    renderLog(data.logs || []);
+
+    // Update dirty count badge
+    const dirty = data.dirtyCount || {};
+    const totalDirty = Object.values(dirty).reduce((s,v)=>s+(v||0),0);
+    const ssDirty = document.getElementById('ss-dirty-count');
+    if (ssDirty) {
+      ssDirty.textContent = totalDirty;
+      ssDirty.style.color = totalDirty > 0 ? 'var(--warn,#f59e0b)' : 'var(--ok)';
+    }
+
+    // Update last push time
+    const ssLast = document.getElementById('ss-last-sync');
+    if (ssLast && data.logs && data.logs.length > 0) {
+      ssLast.textContent = fmtTime(data.logs[0].synced_at);
+    }
+
+    // Error count
+    const ssErr = document.getElementById('ss-error-count');
+    if (ssErr) {
+      const ec = (data.logs||[]).filter(l => l.error).length;
+      ssErr.textContent = ec;
+      ssErr.style.color = ec ? 'var(--err)' : 'var(--ok)';
+    }
+
+    // Total pushed
+    const ssTotal = document.getElementById('ss-total-rows');
+    if (ssTotal) {
+      const pushed = (data.logs||[]).reduce((s,l)=>s+(l.rows_pushed||0),0);
+      ssTotal.textContent = pushed;
+    }
+  } catch(_) {
+    toast('載入同步狀態失敗', 'err');
+  }
+}
+
+function renderLog(logs) {
+  const sorted = logs.slice().sort((a, b) => (b.synced_at||0) - (a.synced_at||0));
+  const tbody  = document.getElementById('log-body');
+  const footer = document.getElementById('log-footer');
+  if (!tbody) return;
+
+  if (sorted.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" class="empty">
+      <span class="material-icons">history_toggle_off</span>尚無推送紀錄
+    </td></tr>`;
+  } else {
+    tbody.innerHTML = sorted.map(log => {
+      const hasErr = !!log.error;
+      const ts = log.synced_at ? fmtTime(log.synced_at) : '—';
+      const dir = log.direction === 'push' ? '↑ 推送' : '↓ 拉取';
+      return `<tr class="${hasErr ? 'log-row-err' : 'log-row-ok'}">
+        <td>${esc(ts)}</td>
+        <td>${esc(log.table_name || '—')}</td>
+        <td>${dir}</td>
+        <td>${log.rows_pushed != null ? log.rows_pushed : '—'}</td>
+        <td>${hasErr
+          ? `<span class="c-err"><span class="material-icons" style="font-size:13px;vertical-align:middle">error_outline</span> ${esc(log.error)}</span>`
+          : `<span class="c-ok"><span class="material-icons" style="font-size:13px;vertical-align:middle">check_circle</span> 成功</span>`
+        }</td>
+      </tr>`;
+    }).join('');
+  }
+  if (footer) footer.textContent = `共 ${sorted.length} 筆記錄`;
+}
+
+// ── Init：格式化所有 timestamp ───────────────────────────────────────────────
+(function() {
+  // 摘要卡片
+  ['ss-last-sync', 'mgr-last-time'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const n = parseInt(el.textContent.trim(), 10);
+    if (!isNaN(n) && n > 1_000_000_000_000) el.textContent = fmtTime(n);
+  });
+
+  // 資料表卡片時間
+  document.querySelectorAll('[id^="tsc-time-"]').forEach(el => {
+    const n = parseInt(el.textContent.trim(), 10);
+    if (!isNaN(n) && n > 1_000_000_000_000) el.textContent = fmtTime(n);
+  });
+
+  // 日誌時間
+  document.querySelectorAll('.ts-cell').forEach(td => {
+    const n = parseInt(td.dataset.ts || td.textContent, 10);
+    if (!isNaN(n) && n > 1_000_000_000_000) td.textContent = fmtTime(n);
+  });
+
+  // mgr-last-time 初始文字
+  const mgrLast = document.getElementById('mgr-last-time');
+  if (mgrLast && mgrLast.textContent.trim() === '最後同步：') {
+    mgrLast.textContent = '';
+  }
+})();
+
+// ── 讓 base.html 的 SSE sync_done 觸發重整 ──────────────────────────────────
+function onSyncComplete() { refreshLog(); }
+</script>
+{% endblock %}
