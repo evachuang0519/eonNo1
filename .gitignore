@@ -20,8 +20,8 @@ env/
 *.env
 backend/config.py
 
-# 資料庫備份（含個資）
-*.sql
+# 資料庫備份（含個資，勿上傳）
+*_backup*.sql
 *.dump
 *.bak
 data/

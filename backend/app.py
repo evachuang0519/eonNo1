@@ -2,8 +2,7 @@
 日照交通服務系統 — Python Flask Backend (v2)
   - REST API for browser JS frontend
   - Server-Sent Events (SSE) for real-time push
-  - 資料全存本機正規化 PostgreSQL；手動推送至 AppSheet
-  - 不再有 APScheduler 自動拉取
+  - 資料全存本機 PostgreSQL
 """
 import json
 import queue
@@ -17,26 +16,22 @@ from collections import defaultdict
 from flask import Flask, Response, request, jsonify, stream_with_context, render_template
 from config import API_PORT, TABLE_CONFIG
 
-# ── 舊版資料庫（JSONB records 表，供尚未遷移的功能使用）
+# ── 舊版資料庫（JSONB records 表）
 from database import (
     init_db, get_records, get_record, delete_record,
-    get_table_counts, get_sync_log, mark_dirty, mark_clean,
-    upsert_record
+    get_table_counts, save_record
 )
 # ── 新版正規化資料庫
 from database_v2 import (
     get_conn_v2,
+    get_fleets, upsert_fleet,
+    get_vehicles, upsert_vehicle,
     get_centers, upsert_center,
-    get_drivers, upsert_driver,
+    get_drivers, upsert_driver, dispatch_order,
     get_patients, get_patient_full, upsert_patient,
     get_orders, upsert_order,
-    get_users, get_dirty_counts,
+    get_users,
 )
-# ── 推送同步引擎（本機 → AppSheet）
-from sync_engine_v2 import push_all, push_table, get_push_status
-
-# ── AppSheet 直接操作（保留供特殊路由使用）
-from appsheet_client import add_row, edit_row, delete_row
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger(__name__)
@@ -110,52 +105,6 @@ def events():
     )
 
 
-# ── Sync API (v2 push) ─────────────────────────────────────────────────────────
-
-@app.route("/api/sync/status")
-def sync_status():
-    """回傳各表 dirty 數量與最近推送紀錄"""
-    status = get_push_status()
-    return jsonify(status)
-
-
-@app.route("/api/sync/trigger", methods=["POST"])
-def sync_trigger():
-    """觸發全量推送（所有 dirty 記錄 → AppSheet）"""
-    def run():
-        result = push_all(progress_cb=broadcast)
-        broadcast({"type": "push_complete", **result})
-    threading.Thread(target=run, daemon=True).start()
-    return jsonify({"ok": True, "message": "push started"})
-
-
-@app.route("/api/sync/one/<path:table_name>", methods=["POST"])
-def sync_one_table(table_name):
-    """推送單一資料表的 dirty 記錄"""
-    def run():
-        result = push_table(table_name, progress_cb=broadcast)
-        if result.get("error"):
-            broadcast({"type": "sync_table_done", "table": table_name,
-                       "error": result["error"]})
-        else:
-            broadcast({"type": "sync_table_done", "table": table_name,
-                       "count": result.get("count", 0),
-                       "skipped": result.get("skipped", False),
-                       "timestamp": result.get("timestamp")})
-    threading.Thread(target=run, daemon=True).start()
-    return jsonify({"ok": True, "table": table_name})
-
-
-@app.route("/api/sync/dirty")
-def sync_dirty():
-    """回傳各正規化資料表的 dirty 筆數"""
-    try:
-        counts = get_dirty_counts()
-        return jsonify(counts)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 # ── Tables meta ────────────────────────────────────────────────────────────────
 
 @app.route("/api/tables")
@@ -179,7 +128,8 @@ def tables_list():
 @app.route("/api/<table>", methods=["GET"])
 def records_list(table):
     search = request.args.get("search", "")
-    records = get_records(table, search)
+    limit  = request.args.get("limit", 0, type=int)
+    records = get_records(table, search, limit=limit)
     return jsonify(records)
 
 
@@ -198,12 +148,14 @@ def record_add(table):
         return jsonify({"error": f"Unknown table: {table}"}), 400
     row = request.get_json(force=True)
     key_value = row.get(cfg["key"])
-    if not key_value:
+    # Auto-generate key for 日照班表 when not provided
+    if not key_value and table == "日照班表":
+        key_value = gen_task_id(taipei_now())
+        row[cfg["key"]] = key_value
+    elif not key_value:
         return jsonify({"error": f"Key field [{cfg['key']}] is required"}), 400
     try:
-        mark_dirty(table, str(key_value), row)
-        add_row(table, row)
-        mark_clean(table, str(key_value))
+        save_record(table, str(key_value), row)
         broadcast({"type": "row_added", "table": table, "key": key_value})
         return jsonify({"ok": True, "key": key_value})
     except Exception as e:
@@ -217,9 +169,7 @@ def record_edit(table, key):
         return jsonify({"error": f"Unknown table: {table}"}), 400
     row = request.get_json(force=True)
     try:
-        mark_dirty(table, key, row)
-        edit_row(table, row)
-        mark_clean(table, key)
+        save_record(table, key, row)
         broadcast({"type": "row_updated", "table": table, "key": key})
         return jsonify({"ok": True})
     except Exception as e:
@@ -232,7 +182,6 @@ def record_delete(table, key):
     if not cfg:
         return jsonify({"error": f"Unknown table: {table}"}), 400
     try:
-        delete_row(table, cfg["key"], key)
         delete_record(table, key)
         broadcast({"type": "row_deleted", "table": table, "key": key})
         return jsonify({"ok": True})
@@ -241,6 +190,148 @@ def record_delete(table, key):
 
 
 # ── 正規化 API v2 ──────────────────────────────────────────────────────────────
+
+# ---------- fleets ----------
+
+@app.route("/api/v2/fleets", methods=["GET"])
+def v2_fleets_list():
+    return jsonify(get_fleets())
+
+
+@app.route("/api/v2/fleets/<int:fid>", methods=["GET"])
+def v2_fleet_get(fid):
+    items = [f for f in get_fleets(include_deleted=True) if f["id"] == fid]
+    if not items:
+        return jsonify({"error": "Not found"}), 404
+    fleet = items[0]
+    # 附帶旗下司機與車輛
+    fleet["drivers"]  = get_drivers(fleet_id=fid)
+    fleet["vehicles"] = get_vehicles(fleet_id=fid)
+    return jsonify(fleet)
+
+
+@app.route("/api/v2/fleets", methods=["POST"])
+def v2_fleet_add():
+    data = request.get_json(force=True)
+    if not data.get("name"):
+        return jsonify({"error": "name is required"}), 400
+    try:
+        new_id = upsert_fleet(data)
+        broadcast({"type": "row_added", "table": "fleets", "id": new_id})
+        return jsonify({"ok": True, "id": new_id})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/v2/fleets/<int:fid>", methods=["PUT"])
+def v2_fleet_edit(fid):
+    data = request.get_json(force=True)
+    data["id"] = fid
+    try:
+        upsert_fleet(data)
+        broadcast({"type": "row_updated", "table": "fleets", "id": fid})
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/v2/fleets/<int:fid>", methods=["DELETE"])
+def v2_fleet_delete(fid):
+    conn = get_conn_v2()
+    try:
+        conn.run("UPDATE fleets SET deleted=TRUE WHERE id=:id", id=fid)
+        conn.run("COMMIT")
+        broadcast({"type": "row_deleted", "table": "fleets", "id": fid})
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+
+# ---------- vehicles ----------
+
+@app.route("/api/v2/vehicles", methods=["GET"])
+def v2_vehicles_list():
+    fleet_id = request.args.get("fleet_id", type=int)
+    return jsonify(get_vehicles(fleet_id=fleet_id))
+
+
+@app.route("/api/v2/vehicles/<int:vid>", methods=["GET"])
+def v2_vehicle_get(vid):
+    items = [v for v in get_vehicles(include_deleted=True) if v["id"] == vid]
+    if not items:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify(items[0])
+
+
+@app.route("/api/v2/vehicles", methods=["POST"])
+def v2_vehicle_add():
+    data = request.get_json(force=True)
+    if not data.get("plate_no"):
+        return jsonify({"error": "plate_no is required"}), 400
+    try:
+        new_id = upsert_vehicle(data)
+        broadcast({"type": "row_added", "table": "vehicles", "id": new_id})
+        return jsonify({"ok": True, "id": new_id})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/v2/vehicles/<int:vid>", methods=["PUT"])
+def v2_vehicle_edit(vid):
+    data = request.get_json(force=True)
+    data["id"] = vid
+    try:
+        upsert_vehicle(data)
+        broadcast({"type": "row_updated", "table": "vehicles", "id": vid})
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/v2/vehicles/<int:vid>", methods=["DELETE"])
+def v2_vehicle_delete(vid):
+    conn = get_conn_v2()
+    try:
+        conn.run("UPDATE vehicles SET deleted=TRUE WHERE id=:id", id=vid)
+        conn.run("COMMIT")
+        broadcast({"type": "row_deleted", "table": "vehicles", "id": vid})
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+
+# ---------- dispatch ----------
+
+@app.route("/api/action/dispatch", methods=["POST"])
+def action_dispatch():
+    """調度：將班表訂單指派司機/車輛/車行"""
+    body = request.get_json(force=True)
+    order_ids   = body.get("order_ids", [])   # 支援批量調度
+    driver_id   = body.get("driver_id")
+    vehicle_id  = body.get("vehicle_id")
+    fleet_id    = body.get("fleet_id")
+    dispatched_by = body.get("dispatched_by", "管理者")
+
+    if not order_ids:
+        return jsonify({"error": "order_ids required"}), 400
+
+    ok_count = 0
+    for oid in order_ids:
+        success = dispatch_order(
+            order_id=int(oid),
+            driver_id=driver_id, vehicle_id=vehicle_id,
+            fleet_id=fleet_id, dispatched_by=dispatched_by
+        )
+        if success:
+            ok_count += 1
+            broadcast({"type": "row_updated", "table": "orders", "id": oid})
+
+    return jsonify({"ok": True, "dispatched": ok_count, "total": len(order_ids)})
+
 
 # ---------- centers ----------
 
@@ -284,7 +375,7 @@ def v2_center_edit(cid):
 def v2_center_delete(cid):
     conn = get_conn_v2()
     try:
-        conn.run("UPDATE centers SET deleted=TRUE, dirty=TRUE WHERE id=:id", id=cid)
+        conn.run("UPDATE centers SET deleted=TRUE WHERE id=:id", id=cid)
         broadcast({"type": "row_deleted", "table": "centers", "id": cid})
         return jsonify({"ok": True})
     except Exception as e:
@@ -298,6 +389,14 @@ def v2_center_delete(cid):
 @app.route("/api/v2/drivers", methods=["GET"])
 def v2_drivers_list():
     return jsonify(get_drivers())
+
+
+@app.route("/api/v2/drivers/<int:did>", methods=["GET"])
+def v2_driver_get(did):
+    items = [d for d in get_drivers(include_deleted=True) if d["id"] == did]
+    if not items:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify(items[0])
 
 
 @app.route("/api/v2/drivers", methods=["POST"])
@@ -327,7 +426,7 @@ def v2_driver_edit(did):
 def v2_driver_delete(did):
     conn = get_conn_v2()
     try:
-        conn.run("UPDATE drivers SET deleted=TRUE, dirty=TRUE WHERE id=:id", id=did)
+        conn.run("UPDATE drivers SET deleted=TRUE WHERE id=:id", id=did)
         broadcast({"type": "row_deleted", "table": "drivers", "id": did})
         return jsonify({"ok": True})
     except Exception as e:
@@ -379,7 +478,7 @@ def v2_patient_edit(pid):
 def v2_patient_delete(pid):
     conn = get_conn_v2()
     try:
-        conn.run("UPDATE patients SET deleted=TRUE, dirty=TRUE WHERE id=:id", id=pid)
+        conn.run("UPDATE patients SET deleted=TRUE WHERE id=:id", id=pid)
         broadcast({"type": "row_deleted", "table": "patients", "id": pid})
         return jsonify({"ok": True})
     except Exception as e:
@@ -389,6 +488,15 @@ def v2_patient_delete(pid):
 
 
 # ---------- orders ----------
+
+@app.route("/api/v2/orders/<int:oid>", methods=["GET"])
+def v2_order_get(oid):
+    rows = get_orders()
+    items = [o for o in rows if o.get("id") == oid]
+    if not items:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify(items[0])
+
 
 @app.route("/api/v2/orders", methods=["GET"])
 def v2_orders_list():
@@ -428,7 +536,7 @@ def v2_order_edit(oid):
 def v2_order_delete(oid):
     conn = get_conn_v2()
     try:
-        conn.run("UPDATE orders SET deleted=TRUE, dirty=TRUE WHERE id=:id", id=oid)
+        conn.run("UPDATE orders SET deleted=TRUE WHERE id=:id", id=oid)
         broadcast({"type": "row_deleted", "table": "orders", "id": oid})
         return jsonify({"ok": True})
     except Exception as e:
@@ -570,10 +678,9 @@ def _update_order_status(key: str, updates: dict) -> tuple[dict, str | None]:
     if not rec:
         return {}, f"找不到訂單：{key}"
     rec.update(updates)
+    save_rec = {k: v for k, v in rec.items() if k != '_key'}
     try:
-        mark_dirty("日照班表", key, rec)
-        edit_row("日照班表", rec)
-        mark_clean("日照班表", key)
+        save_record("日照班表", key, save_rec)
         broadcast({"type": "row_updated", "table": "日照班表", "key": key})
         return rec, None
     except Exception as e:
@@ -674,18 +781,13 @@ def action_generate():
 
         if not dry_run:
             try:
-                add_row("日照班表", order)
-                upsert_record("日照班表", task_id, order)
+                save_record("日照班表", task_id, order)
                 generated.append(task_id)
                 existing_keys.add(lookup)
             except Exception as e:
                 errors.append({"case": case.get("姓名路程"), "error": str(e)})
         else:
             generated.append({"preview": True, "case": case.get("姓名路程"), "order": order})
-
-    if not dry_run and generated:
-        broadcast({"type": "sync_complete", "source": "generate",
-                   "results": {"日照班表": len(generated)}})
 
     return jsonify({
         "ok":        True,
@@ -695,15 +797,6 @@ def action_generate():
         "skipped":   skipped,
         "errors":    errors,
     })
-
-
-# ── AppSheet webhook ───────────────────────────────────────────────────────────
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    body = request.get_json(silent=True) or {}
-    log.info(f"[Webhook] {str(body)[:200]}")
-    return jsonify({"ok": True, "message": "received"})
 
 
 # ── Health ─────────────────────────────────────────────────────────────────────
@@ -822,11 +915,30 @@ def page_table(table_name):
         table_name=table_name)
 
 
-@app.route("/synclog")
-def page_synclog():
-    status = get_push_status()
-    return render_template("synclog.html",
-        current_page="synclog", tables=_make_tables(), sync_status=status)
+@app.route("/fleets")
+def page_fleets():
+    fleets = get_fleets()
+    return render_template("fleets.html",
+        current_page="fleets", tables=_make_tables(), fleets=fleets)
+
+
+@app.route("/vehicles")
+def page_vehicles():
+    vehicles = get_vehicles()
+    fleets   = get_fleets()
+    drivers  = get_drivers()
+    return render_template("vehicles.html",
+        current_page="vehicles", tables=_make_tables(),
+        vehicles=vehicles, fleets=fleets, drivers=drivers)
+
+
+@app.route("/drivers")
+def page_drivers():
+    drivers = get_drivers()
+    fleets  = get_fleets()
+    return render_template("drivers.html",
+        current_page="drivers", tables=_make_tables(),
+        drivers=drivers, fleets=fleets)
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
@@ -840,6 +952,5 @@ if __name__ == "__main__":
     print("[DB] Initialising PostgreSQL...")
     init_db()
     print("[DB] Ready.\n")
-    print("[Info] 同步模式：手動推送（本機 → AppSheet）\n")
 
     app.run(host="0.0.0.0", port=API_PORT, threaded=True, debug=False)

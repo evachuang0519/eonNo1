@@ -18,12 +18,6 @@
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);display:flex;flex-direction:column;height:100vh;overflow:hidden;}
 #topbar{height:var(--th);background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 20px;gap:12px;z-index:100;flex-shrink:0;}
 #topbar h1{font-size:16px;font-weight:700;color:var(--primary);flex:1;white-space:nowrap;}
-#sync-wrap{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);}
-#sync-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);transition:background .3s;}
-#sync-dot.ok{background:var(--ok);}
-#sync-dot.syncing{background:var(--warn);animation:pulse 1s infinite;}
-#sync-dot.error{background:var(--err);}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 .topbtn{display:flex;align-items:center;gap:4px;padding:6px 14px;background:var(--primary);color:#fff;border:none;border-radius:var(--r);font-size:13px;cursor:pointer;transition:background .2s;}
 .topbtn:hover{background:var(--primary-d);}
 .topbtn:disabled{opacity:.6;cursor:not-allowed;}
@@ -110,13 +104,6 @@ tbody td{padding:10px 14px;max-width:220px;overflow:hidden;text-overflow:ellipsi
 
 <div id="topbar">
   <h1><span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">directions_bus</span>日照接送管理系統</h1>
-  <div id="sync-wrap">
-    <div id="sync-dot"></div>
-    <span id="sync-label">未同步</span>
-  </div>
-  <button class="topbtn" id="sync-btn" onclick="triggerSync()">
-    <span class="material-icons" style="font-size:16px;">sync</span>立即同步
-  </button>
 </div>
 
 <div id="layout">
@@ -156,10 +143,17 @@ tbody td{padding:10px 14px;max-width:220px;overflow:hidden;text-overflow:ellipsi
       {% endfor %}
     </div>
 
-    <div class="s-section">系統</div>
-    <a href="/synclog" class="nav-item {% if current_page == 'synclog' %}active{% endif %}">
-      <span class="material-icons">history</span>同步紀錄
+    <div class="s-section">調度管理</div>
+    <a href="/fleets" class="nav-item {% if current_page == 'fleets' %}active{% endif %}">
+      <span class="material-icons">local_shipping</span>車行管理
     </a>
+    <a href="/vehicles" class="nav-item {% if current_page == 'vehicles' %}active{% endif %}">
+      <span class="material-icons">directions_car</span>車輛管理
+    </a>
+    <a href="/drivers" class="nav-item {% if current_page == 'drivers' %}active{% endif %}">
+      <span class="material-icons">badge</span>司機管理
+    </a>
+
   </nav>
 
   <main id="main">
@@ -235,36 +229,6 @@ function toast(msg, type='info') {
   setTimeout(() => el.remove(), 3500);
 }
 
-// ── Sync ─────────────────────────────────────────────────────────────────────
-
-function setSyncDot(state, label) {
-  const dot = document.getElementById('sync-dot');
-  const lbl = document.getElementById('sync-label');
-  dot.className = state; // ok | syncing | error | ''
-  if (label) lbl.textContent = label;
-}
-
-async function triggerSync() {
-  const btn = document.getElementById('sync-btn');
-  btn.disabled = true;
-  setSyncDot('syncing', '同步中…');
-  try {
-    const r = await fetch(`${API}/api/sync/trigger`, { method: 'POST' });
-    if (r.ok) {
-      toast('同步已觸發', 'info');
-    } else {
-      const e = await r.json().catch(() => ({}));
-      toast(e.error || '同步失敗', 'err');
-      setSyncDot('error', '同步失敗');
-    }
-  } catch (err) {
-    toast('網路錯誤', 'err');
-    setSyncDot('error', '網路錯誤');
-  } finally {
-    btn.disabled = false;
-  }
-}
-
 // ── SSE ──────────────────────────────────────────────────────────────────────
 
 let _sseSource = null;
@@ -282,52 +246,17 @@ function connectSSE() {
 
     // 分發成 document 自訂事件，讓各頁面可自行監聽 sse:<type>
     document.dispatchEvent(new CustomEvent(`sse:${type}`, { detail: data }));
-
-    // ── Topbar 狀態（共用） ─────────────────────────────────────────────────
-    if (type === 'sync_start') {
-      setSyncDot('syncing', '同步中…');
-      const btn = document.getElementById('sync-btn');
-      if (btn) btn.disabled = true;
-    }
-
-    else if (type === 'sync_progress') {
-      const pct = data.percent !== undefined ? `${data.percent}%` : '';
-      setSyncDot('syncing', pct ? `同步中 ${pct}` : '同步中…');
-    }
-
-    else if (type === 'sync_complete') {
-      _sseRetry = 1000;
-      const ts = data.timestamp ? fmtTime(data.timestamp) : '';
-      setSyncDot('ok', ts ? `同步完成 ${ts}` : '同步完成');
-      const btn = document.getElementById('sync-btn');
-      if (btn) btn.disabled = false;
-      refreshSidebar();
-      if (typeof onSyncComplete === 'function') onSyncComplete();
-    }
-
-    else if (type === 'sync_table_done') {
-      refreshSidebar();
-    }
-
-    else if (type === 'sync_error') {
-      setSyncDot('error', '同步失敗');
-      const btn = document.getElementById('sync-btn');
-      if (btn) btn.disabled = false;
-      toast(data.error || '同步錯誤', 'err');
-    }
   };
 
   _sseSource.onerror = () => {
     _sseSource.close();
     _sseSource = null;
-    setSyncDot('', '連線中斷');
     setTimeout(connectSSE, _sseRetry);
     _sseRetry = Math.min(_sseRetry * 2, 30000);
   };
 
   _sseSource.onopen = () => {
     _sseRetry = 1000;
-    setSyncDot('ok', '已連線');
   };
 }
 
@@ -358,6 +287,49 @@ let _modalKey = '';
 let _modalMode = 'view'; // 'view' | 'edit' | 'add'
 let _modalRecord = {};
 let _modalFields = [];
+
+// ── 欄位類型偵測 & 輸入元件產生 ───────────────────────────────────────────────
+
+const _DATE_KEYS  = ['日期','date','Date','生日','到期','expiry','birthday'];
+const _TIME_KEYS  = ['時間','time','Time'];
+
+function _fieldType(name) {
+  if (_DATE_KEYS.some(k => name.includes(k))) return 'date';
+  if (_TIME_KEYS.some(k => name.includes(k))) return 'time';
+  return 'text';
+}
+
+// MM/DD/YYYY → YYYY-MM-DD
+function _toDateInput(v) {
+  if (!v) return '';
+  const m = String(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`;
+  return String(v).slice(0, 10); // already ISO or partial
+}
+
+// YYYY-MM-DD → MM/DD/YYYY
+function _fromDateInput(v) {
+  if (!v) return '';
+  const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[2]}/${m[3]}/${m[1]}`;
+  return v;
+}
+
+// 產生正確的 input HTML
+function _fieldInput(f, val) {
+  const type = _fieldType(f);
+  const id   = `fi-${esc(f)}`;
+  if (type === 'date') {
+    const iso = _toDateInput(val ?? '');
+    return `<input class="fi" type="date" id="${id}" value="${esc(iso)}">`;
+  }
+  if (type === 'time') {
+    // 確保 HH:MM 格式
+    const t = String(val ?? '').slice(0, 5);
+    return `<input class="fi" type="time" id="${id}" value="${esc(t)}">`;
+  }
+  return `<input class="fi" id="${id}" value="${esc(val ?? '')}" placeholder="${esc(f)}">`;
+}
 
 function openRecord(tableName, key) {
   _modalTable = tableName;
@@ -390,9 +362,9 @@ async function openAddModal(tableName) {
     </button>`;
   overlay.classList.add('open');
 
-  // 從第一筆記錄取得欄位結構
+  // 只取第一筆來推斷欄位結構（避免下載全量資料）
   try {
-    const r = await fetch(`${API}/api/${encodeURIComponent(tableName)}`);
+    const r = await fetch(`${API}/api/${encodeURIComponent(tableName)}?limit=1`);
     if (r.ok) {
       const data = await r.json();
       if (data && data.length > 0) {
@@ -444,7 +416,7 @@ function _renderModal(mode) {
   const body = document.getElementById('modal-body');
   const foot = document.getElementById('modal-foot');
 
-  const fields = _modalFields.filter(f => f !== '_RowNumber' && !f.startsWith('Related'));
+  const fields = _modalFields.filter(f => f !== '_RowNumber' && f !== '_key' && !f.startsWith('Related'));
 
   if (mode === 'view') {
     body.innerHTML = `<div class="field-grid">${
@@ -468,7 +440,7 @@ function _renderModal(mode) {
       fields.map(f => `
         <div class="fg ${f.length > 8 ? 'full' : ''}">
           <label class="fl" for="fi-${esc(f)}">${esc(f)}</label>
-          <input class="fi" id="fi-${esc(f)}" value="${esc(_modalRecord[f] ?? '')}" placeholder="${esc(f)}">
+          ${_fieldInput(f, _modalRecord[f])}
         </div>`).join('')
     }</div>`;
     foot.innerHTML = `
@@ -494,12 +466,16 @@ function _renderModalAdd(tbl) {
 }
 
 async function saveRecord() {
-  const fields = _modalFields.filter(f => f !== '_RowNumber' && !f.startsWith('Related'));
+  const fields = _modalFields.filter(f => f !== '_RowNumber' && f !== '_key' && !f.startsWith('Related'));
   const payload = {};
   fields.forEach(f => {
     const el = document.getElementById(`fi-${f}`);
-    if (el) payload[f] = el.value;
+    if (!el) return;
+    const type = _fieldType(f);
+    // 日期欄位：從 YYYY-MM-DD 轉回 MM/DD/YYYY 存回資料庫
+    payload[f] = type === 'date' ? _fromDateInput(el.value) : el.value;
   });
+  delete payload['_key']; // Never store injected key field
 
   const url = _modalMode === 'add'
     ? `${API}/api/${encodeURIComponent(_modalTable)}`

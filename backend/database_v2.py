@@ -49,12 +49,140 @@ def _rows_to_dicts(conn, sql: str, **params) -> list[dict]:
     return [_to_dict(cols, row) for row in rows]
 
 
-def _mark_dirty(conn, table: str, record_id: int):
-    conn.run(f"UPDATE {table} SET dirty=TRUE WHERE id=:id", id=record_id)
+# ════════════════════════════════════════════════════════════════
+#  fleets — 車行（運輸公司）
+# ════════════════════════════════════════════════════════════════
+
+def get_fleets(include_deleted: bool = False) -> list[dict]:
+    conn = get_conn_v2()
+    try:
+        where = "" if include_deleted else "WHERE f.deleted=FALSE"
+        rows = conn.run(f"""
+            SELECT f.id, f.name, f.short_name, f.phone, f.address,
+                   f.contact_person, f.email, f.tax_id, f.notes,
+                   f.is_active, f.dirty,
+                   f.created_at, f.updated_at,
+                   COUNT(DISTINCT d.id) FILTER (WHERE d.deleted=FALSE) AS driver_count,
+                   COUNT(DISTINCT v.id) FILTER (WHERE v.deleted=FALSE) AS vehicle_count
+            FROM fleets f
+            LEFT JOIN drivers  d ON d.fleet_id = f.id
+            LEFT JOIN vehicles v ON v.fleet_id = f.id
+            {where}
+            GROUP BY f.id ORDER BY f.name
+        """)
+        cols = ["id","name","short_name","phone","address","contact_person","email",
+                "tax_id","notes","is_active","dirty","created_at","updated_at",
+                "driver_count","vehicle_count"]
+        return [_to_dict(cols, r) for r in rows]
+    finally:
+        conn.close()
 
 
-def _mark_clean(conn, table: str, record_id: int):
-    conn.run(f"UPDATE {table} SET dirty=FALSE WHERE id=:id", id=record_id)
+def upsert_fleet(data: dict) -> int:
+    conn = get_conn_v2()
+    try:
+        if data.get("id"):
+            conn.run("""
+                UPDATE fleets SET name=:n, short_name=:sn, phone=:ph,
+                    address=:ad, contact_person=:cp, email=:em,
+                    tax_id=:ti, notes=:nt, is_active=:ia, dirty=TRUE
+                WHERE id=:id
+            """, id=data["id"], n=data["name"], sn=data.get("short_name"),
+                ph=data.get("phone"), ad=data.get("address"),
+                cp=data.get("contact_person"), em=data.get("email"),
+                ti=data.get("tax_id"), nt=data.get("notes"),
+                ia=data.get("is_active", True))
+            conn.run("COMMIT")
+            return data["id"]
+        else:
+            rows = conn.run("""
+                INSERT INTO fleets (name,short_name,phone,address,contact_person,
+                                    email,tax_id,notes,is_active,dirty)
+                VALUES (:n,:sn,:ph,:ad,:cp,:em,:ti,:nt,:ia,TRUE) RETURNING id
+            """, n=data["name"], sn=data.get("short_name"), ph=data.get("phone"),
+                ad=data.get("address"), cp=data.get("contact_person"),
+                em=data.get("email"), ti=data.get("tax_id"),
+                nt=data.get("notes"), ia=data.get("is_active", True))
+            conn.run("COMMIT")
+            return rows[0][0]
+    finally:
+        conn.close()
+
+
+# ════════════════════════════════════════════════════════════════
+#  vehicles — 車輛
+# ════════════════════════════════════════════════════════════════
+
+def get_vehicles(fleet_id: int = None, include_deleted: bool = False) -> list[dict]:
+    conn = get_conn_v2()
+    try:
+        conditions = [] if include_deleted else ["v.deleted=FALSE"]
+        if fleet_id:
+            conditions.append(f"v.fleet_id={fleet_id}")
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        rows = conn.run(f"""
+            SELECT v.id, v.plate_no, v.brand, v.model, v.year, v.color,
+                   v.seats, v.wheelchair, v.fleet_id,
+                   f.name AS fleet_name, f.short_name AS fleet_short,
+                   v.status, v.license_expiry, v.insurance_expiry,
+                   v.photo_url, v.notes, v.appsheet_key,
+                   v.dirty, v.created_at, v.updated_at,
+                   d.id AS current_driver_id, d.name AS current_driver_name
+            FROM vehicles v
+            LEFT JOIN fleets  f ON f.id = v.fleet_id
+            LEFT JOIN drivers d ON d.vehicle_id = v.id AND d.deleted=FALSE
+            {where}
+            ORDER BY f.name NULLS LAST, v.plate_no
+        """)
+        cols = ["id","plate_no","brand","model","year","color","seats","wheelchair",
+                "fleet_id","fleet_name","fleet_short","status",
+                "license_expiry","insurance_expiry","photo_url","notes","appsheet_key",
+                "dirty","created_at","updated_at",
+                "current_driver_id","current_driver_name"]
+        return [_to_dict(cols, r) for r in rows]
+    finally:
+        conn.close()
+
+
+def upsert_vehicle(data: dict) -> int:
+    conn = get_conn_v2()
+    try:
+        if data.get("id"):
+            conn.run("""
+                UPDATE vehicles SET plate_no=:pn, brand=:br, model=:mo, year=:yr,
+                    color=:cl, seats=:se, wheelchair=:wc, fleet_id=:fi,
+                    status=:st, license_expiry=:le, insurance_expiry=:ie,
+                    notes=:nt, dirty=TRUE
+                WHERE id=:id
+            """, id=data["id"], pn=data["plate_no"], br=data.get("brand"),
+                mo=data.get("model"), yr=data.get("year") or None,
+                cl=data.get("color"), se=data.get("seats") or 7,
+                wc=data.get("wheelchair", False),
+                fi=data.get("fleet_id") or None,
+                st=data.get("status","active"),
+                le=data.get("license_expiry") or None,
+                ie=data.get("insurance_expiry") or None,
+                nt=data.get("notes"))
+            conn.run("COMMIT")
+            return data["id"]
+        else:
+            rows = conn.run("""
+                INSERT INTO vehicles (plate_no,brand,model,year,color,seats,wheelchair,
+                                      fleet_id,status,license_expiry,insurance_expiry,
+                                      notes,dirty)
+                VALUES (:pn,:br,:mo,:yr,:cl,:se,:wc,:fi,:st,:le,:ie,:nt,TRUE)
+                RETURNING id
+            """, pn=data["plate_no"], br=data.get("brand"), mo=data.get("model"),
+                yr=data.get("year") or None, cl=data.get("color"),
+                se=data.get("seats") or 7, wc=data.get("wheelchair", False),
+                fi=data.get("fleet_id") or None, st=data.get("status","active"),
+                le=data.get("license_expiry") or None,
+                ie=data.get("insurance_expiry") or None,
+                nt=data.get("notes"))
+            conn.run("COMMIT")
+            return rows[0][0]
+    finally:
+        conn.close()
 
 
 # ════════════════════════════════════════════════════════════════
@@ -103,18 +231,26 @@ def upsert_center(data: dict) -> int:
 #  drivers — 司機
 # ════════════════════════════════════════════════════════════════
 
-def get_drivers(include_deleted: bool = False) -> list[dict]:
+def get_drivers(fleet_id: int = None, include_deleted: bool = False) -> list[dict]:
     conn = get_conn_v2()
     try:
-        where = "" if include_deleted else "WHERE deleted=FALSE"
+        conditions = [] if include_deleted else ["d.deleted=FALSE"]
+        if fleet_id:
+            conditions.append(f"d.fleet_id={fleet_id}")
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         rows = conn.run(f"""
-            SELECT id, name, phone, email, vehicle_no, fleet,
-                   photo_url, vehicle_photo_url, notes,
-                   appsheet_key, is_active, dirty
-            FROM drivers {where} ORDER BY name
+            SELECT d.id, d.name, d.phone, d.email, d.vehicle_no,
+                   d.fleet, d.fleet_id, f.name AS fleet_name,
+                   d.vehicle_id, v.plate_no AS vehicle_plate,
+                   d.photo_url, d.vehicle_photo_url, d.notes,
+                   d.appsheet_key, d.is_active, d.dirty
+            FROM drivers d
+            LEFT JOIN fleets   f ON f.id = d.fleet_id
+            LEFT JOIN vehicles v ON v.id = d.vehicle_id
+            {where} ORDER BY d.name
         """)
-        cols = ["id","name","phone","email","vehicle_no","fleet",
-                "photo_url","vehicle_photo_url","notes",
+        cols = ["id","name","phone","email","vehicle_no","fleet","fleet_id","fleet_name",
+                "vehicle_id","vehicle_plate","photo_url","vehicle_photo_url","notes",
                 "appsheet_key","is_active","dirty"]
         return [_to_dict(cols, r) for r in rows]
     finally:
@@ -127,21 +263,60 @@ def upsert_driver(data: dict) -> int:
         if data.get("id"):
             conn.run("""
                 UPDATE drivers
-                SET name=:n,phone=:ph,email=:em,vehicle_no=:vn,
-                    fleet=:fl,notes=:nt,dirty=TRUE
+                SET name=:n, phone=:ph, email=:em, vehicle_no=:vn,
+                    fleet=:fl, fleet_id=:fi, vehicle_id=:vi,
+                    notes=:nt, is_active=:ia, dirty=TRUE
                 WHERE id=:id
             """, id=data["id"], n=data["name"], ph=data.get("phone"),
                 em=data.get("email"), vn=data.get("vehicle_no"),
-                fl=data.get("fleet"), nt=data.get("notes"))
+                fl=data.get("fleet"), fi=data.get("fleet_id") or None,
+                vi=data.get("vehicle_id") or None,
+                nt=data.get("notes"), ia=data.get("is_active", True))
+            conn.run("COMMIT")
             return data["id"]
         else:
             rows = conn.run("""
-                INSERT INTO drivers (name,phone,email,vehicle_no,fleet,notes,dirty)
-                VALUES (:n,:ph,:em,:vn,:fl,:nt,TRUE) RETURNING id
-            """, n=data["name"], ph=data.get("phone"),
-                em=data.get("email"), vn=data.get("vehicle_no"),
-                fl=data.get("fleet"), nt=data.get("notes"))
+                INSERT INTO drivers (name,phone,email,vehicle_no,fleet,fleet_id,
+                                     vehicle_id,notes,is_active,dirty)
+                VALUES (:n,:ph,:em,:vn,:fl,:fi,:vi,:nt,:ia,TRUE) RETURNING id
+            """, n=data["name"], ph=data.get("phone"), em=data.get("email"),
+                vn=data.get("vehicle_no"), fl=data.get("fleet"),
+                fi=data.get("fleet_id") or None, vi=data.get("vehicle_id") or None,
+                nt=data.get("notes"), ia=data.get("is_active", True))
+            conn.run("COMMIT")
             return rows[0][0]
+    finally:
+        conn.close()
+
+
+def dispatch_order(order_id: int, driver_id: int = None, vehicle_id: int = None,
+                   fleet_id: int = None, dispatched_by: str = "system") -> bool:
+    """調度：將訂單指派給特定司機/車輛/車行"""
+    conn = get_conn_v2()
+    try:
+        # 取車牌（若有 vehicle_id）
+        vehicle_no = None
+        if vehicle_id:
+            rows = conn.run("SELECT plate_no FROM vehicles WHERE id=:id", id=vehicle_id)
+            if rows:
+                vehicle_no = rows[0][0]
+        conn.run("""
+            UPDATE orders SET
+                driver_id     = COALESCE(:di, driver_id),
+                vehicle_id    = COALESCE(:vi, vehicle_id),
+                vehicle_no    = COALESCE(:vn, vehicle_no),
+                fleet_id      = COALESCE(:fi, fleet_id),
+                dispatched_at = NOW(),
+                dispatched_by = :db,
+                dirty         = TRUE
+            WHERE id = :oid AND deleted = FALSE
+        """, di=driver_id, vi=vehicle_id, vn=vehicle_no,
+            fi=fleet_id, db=dispatched_by, oid=order_id)
+        conn.run("COMMIT")
+        return True
+    except Exception as e:
+        log.error(f"dispatch_order error: {e}")
+        return False
     finally:
         conn.close()
 
@@ -378,18 +553,6 @@ def get_pending_queue(table_name: str = None) -> list[dict]:
     finally:
         conn.close()
 
-
-def get_dirty_counts() -> dict:
-    """回傳各資料表的 dirty 筆數"""
-    conn = get_conn_v2()
-    try:
-        result = {}
-        for tbl in ["centers","drivers","patients","patient_routes","orders"]:
-            rows = conn.run(f"SELECT COUNT(*) FROM {tbl} WHERE dirty=TRUE AND deleted=FALSE")
-            result[tbl] = rows[0][0]
-        return result
-    finally:
-        conn.close()
 
 
 def mark_synced(source_table: str, record_id: int):

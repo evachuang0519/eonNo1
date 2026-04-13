@@ -1,0 +1,350 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<style>
+.fleet-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;margin-bottom:24px;}
+.fleet-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;transition:box-shadow .2s,transform .15s;}
+.fleet-card:hover{box-shadow:0 4px 16px rgba(0,0,0,.08);transform:translateY(-1px);}
+.fleet-card-head{padding:14px 16px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--border);background:linear-gradient(135deg,#0f172a,#1e293b);}
+.fleet-icon{width:44px;height:44px;border-radius:10px;background:#f59e0b;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.fleet-icon .material-icons{color:#fff;font-size:22px;}
+.fleet-name{font-size:15px;font-weight:700;color:#f1f5f9;flex:1;}
+.fleet-short{font-size:11px;color:#94a3b8;margin-top:2px;}
+.fleet-card-body{padding:14px 16px;display:flex;flex-direction:column;gap:8px;}
+.fleet-row{display:flex;align-items:flex-start;gap:8px;font-size:12px;}
+.fleet-row .material-icons{font-size:15px;color:var(--muted);flex-shrink:0;margin-top:1px;}
+.fleet-row-val{color:var(--text);flex:1;word-break:break-all;}
+.fleet-card-foot{padding:10px 16px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.fleet-stats{display:flex;gap:12px;}
+.fleet-stat{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);}
+.fleet-stat strong{color:var(--primary);font-size:14px;}
+.fleet-actions{display:flex;gap:6px;}
+.f-btn{display:inline-flex;align-items:center;gap:3px;padding:5px 10px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text);transition:all .15s;}
+.f-btn:hover{background:var(--primary);color:#fff;border-color:var(--primary);}
+.f-btn-danger:hover{background:var(--err);border-color:var(--err);}
+.f-btn .material-icons{font-size:13px;}
+.inactive-badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:600;background:#fee2e2;color:#991b1b;margin-left:6px;}
+
+/* ── modal extras ── */
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.form-row.full{grid-template-columns:1fr;}
+.form-group{display:flex;flex-direction:column;gap:4px;}
+.form-label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;}
+
+/* ── side panel (司機 + 車輛 list) ── */
+.panel-tabs{display:flex;border-bottom:1px solid var(--border);margin-bottom:12px;}
+.panel-tab{padding:8px 16px;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted);}
+.panel-tab.active{border-bottom-color:var(--primary);color:var(--primary);font-weight:600;}
+.member-list{display:flex;flex-direction:column;gap:6px;max-height:260px;overflow-y:auto;}
+.member-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;background:var(--bg);font-size:12px;}
+.member-avatar{width:32px;height:32px;border-radius:50%;background:var(--primary);display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:700;flex-shrink:0;}
+.member-name{font-weight:600;color:var(--text);}
+.member-sub{color:var(--muted);font-size:11px;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-title">
+  <span class="material-icons" style="color:#f59e0b;">local_shipping</span>車行管理
+  <span style="font-size:14px;font-weight:400;color:var(--muted);margin-left:4px;" id="fleet-count">({{ fleets|length }} 間)</span>
+</div>
+
+<!-- 工具列 -->
+<div style="display:flex;gap:10px;margin-bottom:20px;align-items:center;flex-wrap:wrap;">
+  <div class="search-box" style="max-width:300px;">
+    <span class="material-icons">search</span>
+    <input type="text" id="fleet-search" placeholder="搜尋車行名稱、聯絡人…" oninput="filterFleets()">
+  </div>
+  <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);cursor:pointer;">
+    <input type="checkbox" id="show-inactive" onchange="filterFleets()"> 顯示停用
+  </label>
+  <button class="btn btn-primary" style="margin-left:auto" onclick="openFleetAdd()">
+    <span class="material-icons" style="font-size:15px">add</span>新增車行
+  </button>
+</div>
+
+<!-- 車行卡片格 -->
+<div class="fleet-grid" id="fleet-grid">
+  {% for f in fleets %}
+  <div class="fleet-card" data-id="{{ f.id }}" data-name="{{ f.name }}"
+       data-active="{{ 'true' if f.is_active else 'false' }}">
+    <div class="fleet-card-head">
+      <div class="fleet-icon"><span class="material-icons">local_shipping</span></div>
+      <div style="flex:1;min-width:0;">
+        <div class="fleet-name">
+          {{ f.name }}
+          {% if not f.is_active %}
+          <span class="inactive-badge">停用</span>
+          {% endif %}
+        </div>
+        {% if f.short_name %}<div class="fleet-short">{{ f.short_name }}</div>{% endif %}
+      </div>
+    </div>
+    <div class="fleet-card-body">
+      {% if f.contact_person or f.phone %}
+      <div class="fleet-row">
+        <span class="material-icons">person</span>
+        <div class="fleet-row-val">
+          {% if f.contact_person %}{{ f.contact_person }}{% endif %}
+          {% if f.phone %}<a href="tel:{{ f.phone }}" style="color:var(--primary);margin-left:6px;" onclick="event.stopPropagation()">{{ f.phone }}</a>{% endif %}
+        </div>
+      </div>
+      {% endif %}
+      {% if f.address %}
+      <div class="fleet-row">
+        <span class="material-icons">place</span>
+        <div class="fleet-row-val">{{ f.address }}</div>
+      </div>
+      {% endif %}
+      {% if f.email %}
+      <div class="fleet-row">
+        <span class="material-icons">email</span>
+        <div class="fleet-row-val">{{ f.email }}</div>
+      </div>
+      {% endif %}
+      {% if f.tax_id %}
+      <div class="fleet-row">
+        <span class="material-icons">badge</span>
+        <div class="fleet-row-val">統編：{{ f.tax_id }}</div>
+      </div>
+      {% endif %}
+    </div>
+    <div class="fleet-card-foot">
+      <div class="fleet-stats">
+        <div class="fleet-stat">
+          <span class="material-icons" style="font-size:14px">directions_car</span>
+          <strong id="fc-drivers-{{ f.id }}">{{ f.driver_count or 0 }}</strong> 司機
+        </div>
+        <div class="fleet-stat">
+          <span class="material-icons" style="font-size:14px">airport_shuttle</span>
+          <strong id="fc-vehicles-{{ f.id }}">{{ f.vehicle_count or 0 }}</strong> 車輛
+        </div>
+      </div>
+      <div class="fleet-actions">
+        <button class="f-btn" onclick="viewFleet({{ f.id }})">
+          <span class="material-icons">group</span>成員
+        </button>
+        <button class="f-btn" onclick="editFleet({{ f.id }}, {{ f | tojson | tojson }})">
+          <span class="material-icons">edit</span>編輯
+        </button>
+        <button class="f-btn f-btn-danger" onclick="deleteFleet({{ f.id }}, '{{ f.name }}')">
+          <span class="material-icons">delete</span>
+        </button>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div style="grid-column:1/-1;" class="empty">
+    <span class="material-icons">local_shipping</span>尚無車行，點「新增車行」開始
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let _fleets = {{ fleets | tojson }};
+
+// ── 搜尋過濾 ─────────────────────────────────────────────────────────────────
+
+function filterFleets() {
+  const q       = (document.getElementById('fleet-search').value || '').toLowerCase();
+  const showAll = document.getElementById('show-inactive').checked;
+  const cards   = document.querySelectorAll('.fleet-card');
+  let visible = 0;
+  cards.forEach(card => {
+    const name   = (card.dataset.name || '').toLowerCase();
+    const active = card.dataset.active === 'true';
+    const match  = (!q || name.includes(q)) && (showAll || active);
+    card.style.display = match ? '' : 'none';
+    if (match) visible++;
+  });
+  document.getElementById('fleet-count').textContent = `(${visible} 間)`;
+}
+
+// ── Add Modal ────────────────────────────────────────────────────────────────
+
+function openFleetAdd() {
+  _showFleetModal({}, 'add');
+}
+
+function editFleet(id, jsonStr) {
+  const data = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
+  _showFleetModal(data, 'edit');
+}
+
+function _showFleetModal(data, mode) {
+  const isEdit = mode === 'edit';
+  document.getElementById('modal-title').textContent = isEdit ? `編輯車行 — ${data.name}` : '新增車行';
+  document.getElementById('modal-icon').textContent = 'local_shipping';
+  document.getElementById('modal-icon').style.color = '#f59e0b';
+
+  document.getElementById('modal-body').innerHTML = `
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">車行名稱 *</label>
+        <input class="fi" id="fm-name" value="${esc(data.name||'')}" placeholder="必填">
+      </div>
+      <div class="form-group">
+        <label class="form-label">簡稱</label>
+        <input class="fi" id="fm-short" value="${esc(data.short_name||'')}" placeholder="顯示縮寫">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">聯絡電話</label>
+        <input class="fi" id="fm-phone" value="${esc(data.phone||'')}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">聯絡人</label>
+        <input class="fi" id="fm-contact" value="${esc(data.contact_person||'')}">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">電子郵件</label>
+        <input class="fi" id="fm-email" value="${esc(data.email||'')}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">統一編號</label>
+        <input class="fi" id="fm-taxid" value="${esc(data.tax_id||'')}">
+      </div>
+    </div>
+    <div class="form-row full">
+      <div class="form-group">
+        <label class="form-label">地址</label>
+        <input class="fi" id="fm-addr" value="${esc(data.address||'')}">
+      </div>
+    </div>
+    <div class="form-row full">
+      <div class="form-group">
+        <label class="form-label">備註</label>
+        <input class="fi" id="fm-notes" value="${esc(data.notes||'')}">
+      </div>
+    </div>
+    <div style="margin-top:12px;display:flex;align-items:center;gap:8px;">
+      <input type="checkbox" id="fm-active" ${data.is_active !== false ? 'checked' : ''}>
+      <label for="fm-active" style="font-size:13px;cursor:pointer;">啟用中</label>
+    </div>
+  `;
+
+  document.getElementById('modal-foot').innerHTML = `
+    <button class="btn btn-ghost" onclick="closeModal()">取消</button>
+    <button class="btn btn-primary" onclick="_saveFleet(${isEdit ? data.id : 'null'})">
+      <span class="material-icons" style="font-size:15px">save</span>儲存
+    </button>
+  `;
+
+  document.getElementById('overlay').classList.add('open');
+}
+
+async function _saveFleet(id) {
+  const payload = {
+    name:           document.getElementById('fm-name').value.trim(),
+    short_name:     document.getElementById('fm-short').value.trim(),
+    phone:          document.getElementById('fm-phone').value.trim(),
+    contact_person: document.getElementById('fm-contact').value.trim(),
+    email:          document.getElementById('fm-email').value.trim(),
+    tax_id:         document.getElementById('fm-taxid').value.trim(),
+    address:        document.getElementById('fm-addr').value.trim(),
+    notes:          document.getElementById('fm-notes').value.trim(),
+    is_active:      document.getElementById('fm-active').checked,
+  };
+  if (!payload.name) { toast('車行名稱必填', 'err'); return; }
+
+  const url    = id ? `/api/v2/fleets/${id}` : '/api/v2/fleets';
+  const method = id ? 'PUT' : 'POST';
+
+  try {
+    const r = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const res = await r.json();
+    if (!r.ok) { toast(res.error || '儲存失敗', 'err'); return; }
+    toast(id ? '車行已更新' : '車行已新增', 'ok');
+    closeModal();
+    location.reload();
+  } catch(_) { toast('網路錯誤', 'err'); }
+}
+
+// ── Delete ───────────────────────────────────────────────────────────────────
+
+async function deleteFleet(id, name) {
+  if (!confirm(`確定要刪除「${name}」？\n旗下司機與車輛的車行歸屬將被清除。`)) return;
+  try {
+    const r = await fetch(`/api/v2/fleets/${id}`, { method: 'DELETE' });
+    if (r.ok) { toast('已刪除', 'ok'); location.reload(); }
+    else { const e = await r.json(); toast(e.error || '刪除失敗', 'err'); }
+  } catch(_) { toast('網路錯誤', 'err'); }
+}
+
+// ── View Members ─────────────────────────────────────────────────────────────
+
+function vStatusCls(s){ return s==='active'?'bg-green':s==='maintenance'?'bg-yellow':'bg-gray'; }
+function vStatusLabel(s){ return s==='active'?'服役':s==='maintenance'?'保養':s==='retired'?'報廢':s||'—'; }
+
+async function viewFleet(id) {
+  document.getElementById('modal-title').textContent = '載入中…';
+  document.getElementById('modal-icon').textContent = 'local_shipping';
+  document.getElementById('modal-icon').style.color = '#f59e0b';
+  document.getElementById('modal-body').innerHTML = '<div style="text-align:center;padding:30px;color:var(--muted)">載入中…</div>';
+  document.getElementById('modal-foot').innerHTML = '<button class="btn btn-ghost" onclick="closeModal()">關閉</button>';
+  document.getElementById('overlay').classList.add('open');
+
+  try {
+    const r = await fetch(`/api/v2/fleets/${id}`);
+    if (!r.ok) throw new Error();
+    const fleet = await r.json();
+    document.getElementById('modal-title').textContent = fleet.name + ' — 成員';
+
+    const drivers  = fleet.drivers  || [];
+    const vehicles = fleet.vehicles || [];
+
+    document.getElementById('modal-body').innerHTML = `
+      <div class="panel-tabs">
+        <div class="panel-tab active" id="tab-drivers"  onclick="switchTab('drivers')">
+          <span class="material-icons" style="font-size:14px;vertical-align:middle">directions_car</span>
+          司機 (${drivers.length})
+        </div>
+        <div class="panel-tab" id="tab-vehicles" onclick="switchTab('vehicles')">
+          <span class="material-icons" style="font-size:14px;vertical-align:middle">airport_shuttle</span>
+          車輛 (${vehicles.length})
+        </div>
+      </div>
+      <div id="panel-drivers" class="member-list">
+        ${drivers.length ? drivers.map(d => `
+          <div class="member-item">
+            <div class="member-avatar">${esc(d.name.charAt(0))}</div>
+            <div style="flex:1">
+              <div class="member-name">${esc(d.name)}</div>
+              <div class="member-sub">${esc(d.phone||'')} ${d.vehicle_plate ? '｜ '+esc(d.vehicle_plate) : ''}</div>
+            </div>
+            <span class="badge ${d.is_active ? 'bg-green' : 'bg-gray'}">${d.is_active ? '在職' : '停用'}</span>
+          </div>`).join('') : '<div style="padding:16px;text-align:center;color:var(--muted)">無司機資料</div>'}
+      </div>
+      <div id="panel-vehicles" class="member-list" style="display:none">
+        ${vehicles.length ? vehicles.map(v => `
+          <div class="member-item">
+            <div class="member-avatar" style="background:#7c3aed;font-size:10px;font-weight:700">${esc(v.plate_no)}</div>
+            <div style="flex:1">
+              <div class="member-name">${esc(v.brand||'')} ${esc(v.model||'')} ${v.year ? '('+v.year+')' : ''}</div>
+              <div class="member-sub">${v.seats||''}座 ${v.wheelchair ? '｜輪椅' : ''} ${v.current_driver_name ? '｜ 司機：'+esc(v.current_driver_name) : ''}</div>
+            </div>
+            <span class="badge ${vStatusCls(v.status)}">${vStatusLabel(v.status)}</span>
+          </div>`).join('') : '<div style="padding:16px;text-align:center;color:var(--muted)">無車輛資料</div>'}
+      </div>
+    `;
+  } catch(_) {
+    document.getElementById('modal-body').innerHTML = '<div class="empty"><span class="material-icons">error_outline</span>載入失敗</div>';
+  }
+}
+
+function switchTab(tab) {
+  document.getElementById('tab-drivers').classList.toggle('active',  tab === 'drivers');
+  document.getElementById('tab-vehicles').classList.toggle('active', tab === 'vehicles');
+  document.getElementById('panel-drivers').style.display  = tab === 'drivers'  ? '' : 'none';
+  document.getElementById('panel-vehicles').style.display = tab === 'vehicles' ? '' : 'none';
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+filterFleets();
+</script>
+{% endblock %}

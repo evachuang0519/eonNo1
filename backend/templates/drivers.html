@@ -1,0 +1,341 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<style>
+.filter-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:18px;}
+.select-box{border:1px solid var(--border);border-radius:var(--r);padding:6px 10px;font-size:13px;background:var(--card);color:var(--text);outline:none;}
+.select-box:focus{border-color:var(--primary);}
+.avatar-cell{width:34px;height:34px;border-radius:50%;background:var(--primary);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px;flex-shrink:0;}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;}
+.form-row.full{grid-template-columns:1fr;}
+.form-row.tri{grid-template-columns:1fr 1fr 1fr;}
+.form-group{display:flex;flex-direction:column;gap:4px;}
+.form-label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-title">
+  <span class="material-icons" style="color:var(--primary);">badge</span>司機管理
+  <span style="font-size:14px;font-weight:400;color:var(--muted);margin-left:4px;" id="drv-count"></span>
+</div>
+
+<!-- filter bar -->
+<div class="filter-bar">
+  <div class="search-box" style="max-width:260px;">
+    <span class="material-icons">search</span>
+    <input type="text" id="search-input" placeholder="姓名 / 電話 / 車牌…" oninput="renderTable()">
+  </div>
+  <select class="select-box" id="fleet-filter" onchange="renderTable()">
+    <option value="">全部車行</option>
+  </select>
+  <select class="select-box" id="active-filter" onchange="renderTable()">
+    <option value="">全部狀態</option>
+    <option value="1">在職</option>
+    <option value="0">離職</option>
+  </select>
+  <button class="btn btn-primary" style="margin-left:auto;" onclick="openAddDriver()">
+    <span class="material-icons" style="font-size:15px;">person_add</span>新增司機
+  </button>
+</div>
+
+<!-- table -->
+<div class="data-card">
+  <div class="tbl-wrap">
+    <table id="drv-table">
+      <thead>
+        <tr>
+          <th></th>
+          <th>姓名</th>
+          <th>電話</th>
+          <th>Email</th>
+          <th>車行</th>
+          <th>車牌號碼</th>
+          <th>狀態</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="drv-tbody">
+        <tr><td colspan="8" class="empty"><span class="material-icons">hourglass_empty</span>載入中…</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="tbl-footer">
+    <span id="drv-footer-count">-</span>
+    <span style="color:var(--muted);">最後更新：<span id="last-updated">-</span></span>
+  </div>
+</div>
+
+<!-- ═══════════════════ ADD / EDIT MODAL ═══════════════════ -->
+<div id="drv-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:300;align-items:center;justify-content:center;" onclick="closeDriverModal(event)">
+  <div style="background:var(--card);border-radius:12px;width:680px;max-width:95vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);">
+    <div style="display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid var(--border);flex-shrink:0;">
+      <span class="material-icons" style="color:var(--primary);">badge</span>
+      <div style="font-weight:700;font-size:15px;flex:1;" id="drv-modal-title">新增司機</div>
+      <button style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:20px;" onclick="closeDriverModal()">✕</button>
+    </div>
+    <div style="padding:20px;overflow-y:auto;flex:1;">
+      <form id="drv-form" onsubmit="saveDriver(event)">
+        <input type="hidden" id="df-id">
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">姓名 *</label>
+            <input class="fi" id="df-name" placeholder="司機姓名" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">電話</label>
+            <input class="fi" id="df-phone" placeholder="0912-345-678">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Email</label>
+            <input class="fi" id="df-email" type="email" placeholder="driver@example.com">
+          </div>
+          <div class="form-group">
+            <label class="form-label">所屬車行</label>
+            <select class="fi" id="df-fleet">
+              <option value="">— 未指定 —</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">預設車輛</label>
+            <select class="fi" id="df-vehicle">
+              <option value="">— 未指定 —</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">車牌號碼（文字）</label>
+            <input class="fi" id="df-vehicle-no" placeholder="備用文字欄位">
+          </div>
+        </div>
+
+        <div class="form-row full">
+          <div class="form-group">
+            <label class="form-label">狀態</label>
+            <select class="fi" id="df-active" style="max-width:200px;">
+              <option value="1">在職</option>
+              <option value="0">離職</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row full">
+          <div class="form-group">
+            <label class="form-label">備註</label>
+            <textarea class="fi" id="df-notes" rows="3" style="resize:vertical;" placeholder="其他說明…"></textarea>
+          </div>
+        </div>
+      </form>
+    </div>
+    <div style="padding:14px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;flex-shrink:0;">
+      <button class="btn btn-ghost" onclick="closeDriverModal()">取消</button>
+      <button class="btn btn-danger" id="drv-del-btn" style="display:none;margin-right:auto;" onclick="deleteDriver()">
+        <span class="material-icons" style="font-size:14px;">delete</span>刪除
+      </button>
+      <button class="btn btn-primary" onclick="saveDriver(event)">
+        <span class="material-icons" style="font-size:14px;">save</span>儲存
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+let _drivers  = [];
+let _fleets   = [];
+let _vehicles = [];
+let _editId   = null;
+
+(async function init(){
+  await Promise.all([loadFleets(), loadVehicles(), loadDrivers()]);
+  document.getElementById('last-updated').textContent = new Date().toLocaleTimeString('zh-TW');
+})();
+
+async function loadFleets(){
+  try {
+    const r = await fetch('/api/v2/fleets');
+    const data = await r.json();
+    _fleets = Array.isArray(data) ? data : (data.fleets || []);
+    const sel = document.getElementById('fleet-filter');
+    sel.innerHTML = '<option value="">全部車行</option>';
+    _fleets.forEach(f => { sel.innerHTML += `<option value="${f.id}">${esc(f.name)}</option>`; });
+    fillFleetSelect('df-fleet');
+  } catch(e){ console.error(e); }
+}
+
+async function loadVehicles(){
+  try {
+    const r = await fetch('/api/v2/vehicles');
+    const data = await r.json();
+    _vehicles = Array.isArray(data) ? data : (data.vehicles || []);
+    fillVehicleSelect('df-vehicle');
+  } catch(e){ console.error(e); }
+}
+
+async function loadDrivers(){
+  try {
+    const r = await fetch('/api/v2/drivers');
+    const data = await r.json();
+    _drivers = Array.isArray(data) ? data : (data.drivers || []);
+    renderTable();
+  } catch(e){ toast('載入司機失敗','err'); }
+}
+
+function fillFleetSelect(id){
+  const sel = document.getElementById(id);
+  sel.innerHTML = '<option value="">— 未指定 —</option>';
+  _fleets.forEach(f => { sel.innerHTML += `<option value="${f.id}">${esc(f.name)}</option>`; });
+}
+
+function fillVehicleSelect(id, selectedId){
+  const sel = document.getElementById(id);
+  sel.innerHTML = '<option value="">— 未指定 —</option>';
+  _vehicles.forEach(v => {
+    const label = [v.plate_no, v.brand, v.model].filter(Boolean).join(' ');
+    sel.innerHTML += `<option value="${v.id}">${esc(label)}</option>`;
+  });
+  if(selectedId) sel.value = String(selectedId);
+}
+
+function renderTable(){
+  const q       = (document.getElementById('search-input').value||'').toLowerCase();
+  const fleetId = document.getElementById('fleet-filter').value;
+  const active  = document.getElementById('active-filter').value;
+
+  const filtered = _drivers.filter(d => {
+    if(fleetId && String(d.fleet_id) !== fleetId) return false;
+    if(active !== ''){
+      const isActive = d.is_active !== false && d.is_active !== 0;
+      if(active === '1' && !isActive)  return false;
+      if(active === '0' && isActive)   return false;
+    }
+    if(q){
+      const hay = [d.name, d.phone, d.email, d.vehicle_plate, d.fleet_name].join(' ').toLowerCase();
+      if(!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  document.getElementById('drv-count').textContent = `(${_drivers.length} 位)`;
+  document.getElementById('drv-footer-count').textContent = `顯示 ${filtered.length} / ${_drivers.length} 筆`;
+
+  const tbody = document.getElementById('drv-tbody');
+  if(!filtered.length){
+    tbody.innerHTML = `<tr><td colspan="8" class="empty"><span class="material-icons">person_off</span><br>沒有符合的司機</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(d => {
+    const initial = (d.name||'?').charAt(0);
+    const isActive = d.is_active !== false && d.is_active !== 0;
+    return `<tr onclick="openEditDriver(${d.id})">
+      <td><div class="avatar-cell">${esc(initial)}</div></td>
+      <td style="font-weight:600;">${esc(d.name||'')}</td>
+      <td>${esc(d.phone||'—')}</td>
+      <td>${esc(d.email||'—')}</td>
+      <td>${esc(d.fleet_name||'—')}</td>
+      <td>${esc(d.vehicle_plate||d.vehicle_no||'—')}</td>
+      <td><span class="badge ${isActive?'bg-green':'bg-gray'}">${isActive?'在職':'離職'}</span></td>
+      <td onclick="event.stopPropagation()">
+        <button class="btn btn-ghost" style="padding:4px 8px;font-size:12px;" onclick="openEditDriver(${d.id})">
+          <span class="material-icons" style="font-size:13px;">edit</span>編輯
+        </button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function openAddDriver(){
+  _editId = null;
+  document.getElementById('drv-modal-title').textContent = '新增司機';
+  document.getElementById('drv-del-btn').style.display = 'none';
+  document.getElementById('drv-form').reset();
+  document.getElementById('df-id').value = '';
+  fillFleetSelect('df-fleet');
+  fillVehicleSelect('df-vehicle');
+  document.getElementById('drv-overlay').style.display = 'flex';
+}
+
+function openEditDriver(id){
+  const d = _drivers.find(x => x.id === id);
+  if(!d) return;
+  _editId = id;
+  document.getElementById('drv-modal-title').textContent = `編輯司機 — ${d.name}`;
+  document.getElementById('drv-del-btn').style.display = 'inline-flex';
+  document.getElementById('df-id').value = d.id;
+  fillFleetSelect('df-fleet');
+  fillVehicleSelect('df-vehicle', d.vehicle_id);
+  document.getElementById('df-name').value       = d.name  || '';
+  document.getElementById('df-phone').value      = d.phone || '';
+  document.getElementById('df-email').value      = d.email || '';
+  document.getElementById('df-vehicle-no').value = d.vehicle_no || '';
+  document.getElementById('df-notes').value      = d.notes || '';
+  setSelect('df-fleet',  d.fleet_id);
+  setSelect('df-active', (d.is_active !== false && d.is_active !== 0) ? '1' : '0');
+  document.getElementById('drv-overlay').style.display = 'flex';
+}
+
+function setSelect(id, val){
+  const el = document.getElementById(id);
+  if(el) el.value = val != null ? String(val) : '';
+}
+
+function closeDriverModal(e){
+  if(e && e.target !== document.getElementById('drv-overlay')) return;
+  document.getElementById('drv-overlay').style.display = 'none';
+}
+
+async function saveDriver(e){
+  if(e) e.preventDefault();
+  const name = document.getElementById('df-name').value.trim();
+  if(!name){ toast('請填寫姓名','err'); return; }
+
+  const payload = {
+    name,
+    phone:          document.getElementById('df-phone').value.trim()||null,
+    email:          document.getElementById('df-email').value.trim()||null,
+    fleet_id:       document.getElementById('df-fleet').value   || null,
+    vehicle_id:     document.getElementById('df-vehicle').value || null,
+    vehicle_no:     document.getElementById('df-vehicle-no').value.trim()||null,
+    is_active:      document.getElementById('df-active').value === '1',
+    notes:          document.getElementById('df-notes').value.trim()||null,
+  };
+  if(_editId) payload.id = _editId;
+
+  try {
+    const url    = _editId ? `/api/v2/drivers/${_editId}` : '/api/v2/drivers';
+    const method = _editId ? 'PUT' : 'POST';
+    const r = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.error||'儲存失敗');
+    toast(_editId ? '已更新司機' : '已新增司機', 'ok');
+    document.getElementById('drv-overlay').style.display = 'none';
+    await loadDrivers();
+  } catch(err){ toast(err.message,'err'); }
+}
+
+async function deleteDriver(){
+  if(!_editId) return;
+  const d = _drivers.find(x => x.id === _editId);
+  if(!confirm(`確定要刪除司機「${d ? d.name : _editId}」？`)) return;
+  try {
+    const r = await fetch(`/api/v2/drivers/${_editId}`, {method:'DELETE'});
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.error||'刪除失敗');
+    toast('已刪除司機','ok');
+    document.getElementById('drv-overlay').style.display = 'none';
+    await loadDrivers();
+  } catch(err){ toast(err.message,'err'); }
+}
+
+function esc(s){
+  if(s==null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+{% endblock %}

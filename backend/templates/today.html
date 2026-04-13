@@ -52,7 +52,10 @@
   <button class="btn btn-ghost" onclick="loadToday()">
     <span class="material-icons" style="font-size:15px">refresh</span>重新整理
   </button>
-  <span id="card-count" style="font-size:12px;color:var(--muted);margin-left:auto;"></span>
+  <button class="btn btn-primary" onclick="openAddModal('日照班表')" style="margin-left:auto;">
+    <span class="material-icons" style="font-size:15px">add</span>新增班表
+  </button>
+  <span id="card-count" style="font-size:12px;color:var(--muted);"></span>
 </div>
 
 <div class="order-grid" id="order-grid"></div>
@@ -240,6 +243,9 @@ function renderCards(orders) {
               <span class="material-icons" style="font-size:14px">map</span>地圖
             </button>
           </a>` : ''}
+        <button class="act-btn btn-maps" onclick="openRecord('日照班表', ${JSON.stringify(key)})">
+          <span class="material-icons" style="font-size:14px">edit</span>編輯
+        </button>
       </div>
     </div>`;
   }).join('');

@@ -37,15 +37,6 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_records_table
                 ON records (table_name)
         """)
-        conn.run("""
-            CREATE TABLE IF NOT EXISTS sync_log (
-                id          SERIAL  PRIMARY KEY,
-                synced_at   BIGINT  NOT NULL,
-                table_name  TEXT,
-                rows_pulled INTEGER NOT NULL DEFAULT 0,
-                error       TEXT
-            )
-        """)
         conn.run("COMMIT")
         print("[DB] Tables ready.")
     finally:
@@ -54,52 +45,17 @@ def init_db():
 
 # ── Write helpers ──────────────────────────────────────────────────────────────
 
-def upsert_record(table_name: str, row_key: str, data: dict):
-    """
-    Insert or update a record from AppSheet sync.
-    Does NOT overwrite data if the local record is dirty (pending write-back).
-    """
+def save_record(table_name: str, row_key: str, data: dict):
+    """Insert or update a record in the local database (no sync/dirty flag)."""
     conn = get_conn()
     try:
         conn.run("""
             INSERT INTO records (table_name, row_key, data, synced_at, dirty)
             VALUES (:tn, :rk, CAST(:data AS JSONB), :ts, FALSE)
             ON CONFLICT (table_name, row_key) DO UPDATE
-              SET data      = CASE WHEN records.dirty THEN records.data
-                                   ELSE CAST(EXCLUDED.data AS JSONB) END,
-                  synced_at = EXCLUDED.synced_at
+              SET data=CAST(EXCLUDED.data AS JSONB), synced_at=EXCLUDED.synced_at, dirty=FALSE
         """, tn=table_name, rk=row_key, data=json.dumps(data, ensure_ascii=False),
              ts=int(time.time() * 1000))
-        conn.run("COMMIT")
-    finally:
-        conn.close()
-
-
-def mark_dirty(table_name: str, row_key: str, data: dict):
-    """Save a locally-edited record (dirty = True, needs write-back to AppSheet)."""
-    conn = get_conn()
-    try:
-        conn.run("""
-            INSERT INTO records (table_name, row_key, data, synced_at, dirty)
-            VALUES (:tn, :rk, CAST(:data AS JSONB), :ts, TRUE)
-            ON CONFLICT (table_name, row_key) DO UPDATE
-              SET data  = CAST(EXCLUDED.data AS JSONB),
-                  dirty = TRUE
-        """, tn=table_name, rk=row_key, data=json.dumps(data, ensure_ascii=False),
-             ts=int(time.time() * 1000))
-        conn.run("COMMIT")
-    finally:
-        conn.close()
-
-
-def mark_clean(table_name: str, row_key: str):
-    """Clear dirty flag after successful AppSheet write-back."""
-    conn = get_conn()
-    try:
-        conn.run(
-            "UPDATE records SET dirty = FALSE WHERE table_name = :tn AND row_key = :rk",
-            tn=table_name, rk=row_key
-        )
         conn.run("COMMIT")
     finally:
         conn.close()
@@ -119,21 +75,27 @@ def delete_record(table_name: str, row_key: str):
 
 # ── Read helpers ───────────────────────────────────────────────────────────────
 
-def get_records(table_name: str, search: str = "") -> list[dict]:
+def get_records(table_name: str, search: str = "", limit: int = 0) -> list[dict]:
     conn = get_conn()
     try:
+        lim_sql = f" LIMIT {int(limit)}" if limit and limit > 0 else ""
         if search:
             rows = conn.run(
-                "SELECT data FROM records WHERE table_name = :tn "
-                "AND data::text ILIKE :search ORDER BY ctid DESC",
+                "SELECT row_key, data FROM records WHERE table_name = :tn "
+                f"AND data::text ILIKE :search ORDER BY ctid DESC{lim_sql}",
                 tn=table_name, search=f"%{search}%"
             )
         else:
             rows = conn.run(
-                "SELECT data FROM records WHERE table_name = :tn ORDER BY ctid DESC",
+                f"SELECT row_key, data FROM records WHERE table_name = :tn ORDER BY ctid DESC{lim_sql}",
                 tn=table_name
             )
-        return [r[0] for r in rows]
+        result = []
+        for r in rows:
+            rec = dict(r[1])
+            rec['_key'] = r[0]
+            result.append(rec)
+        return result
     finally:
         conn.close()
 
@@ -142,10 +104,14 @@ def get_record(table_name: str, row_key: str) -> dict | None:
     conn = get_conn()
     try:
         rows = conn.run(
-            "SELECT data FROM records WHERE table_name = :tn AND row_key = :rk",
+            "SELECT row_key, data FROM records WHERE table_name = :tn AND row_key = :rk",
             tn=table_name, rk=row_key
         )
-        return rows[0][0] if rows else None
+        if rows:
+            rec = dict(rows[0][1])
+            rec['_key'] = rows[0][0]
+            return rec
+        return None
     finally:
         conn.close()
 
@@ -157,35 +123,5 @@ def get_table_counts() -> list[dict]:
             "SELECT table_name, COUNT(*) FROM records GROUP BY table_name"
         )
         return [{"table_name": r[0], "count": r[1]} for r in rows]
-    finally:
-        conn.close()
-
-
-def get_sync_log(limit: int = 30) -> list[dict]:
-    conn = get_conn()
-    try:
-        rows = conn.run(
-            "SELECT id, synced_at, table_name, rows_pulled, error "
-            "FROM sync_log ORDER BY synced_at DESC LIMIT :lim",
-            lim=limit
-        )
-        return [
-            {"id": r[0], "synced_at": r[1], "table_name": r[2],
-             "rows_pulled": r[3], "error": r[4]}
-            for r in rows
-        ]
-    finally:
-        conn.close()
-
-
-def log_sync(table_name: str, rows_pulled: int, error: str = None):
-    conn = get_conn()
-    try:
-        conn.run(
-            "INSERT INTO sync_log (synced_at, table_name, rows_pulled, error) "
-            "VALUES (:ts, :tn, :rp, :err)",
-            ts=int(time.time() * 1000), tn=table_name, rp=rows_pulled, err=error
-        )
-        conn.run("COMMIT")
     finally:
         conn.close()

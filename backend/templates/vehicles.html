@@ -1,0 +1,397 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<style>
+/* ── status badges ── */
+.status-active{background:#dcfce7;color:#166534;}
+.status-maintenance{background:#fef3c7;color:#92400e;}
+.status-retired{background:#fee2e2;color:#991b1b;}
+
+/* ── filter bar ── */
+.filter-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:18px;}
+.select-box{border:1px solid var(--border);border-radius:var(--r);padding:6px 10px;font-size:13px;background:var(--card);color:var(--text);outline:none;}
+.select-box:focus{border-color:var(--primary);}
+
+/* ── vehicle table enhancements ── */
+.plate-cell{font-family:'Courier New',monospace;font-weight:700;font-size:13px;letter-spacing:.05em;}
+.expiry-warn{color:var(--warn);font-weight:600;}
+.expiry-expired{color:var(--err);font-weight:600;}
+.wc-icon{color:var(--primary);font-size:16px;vertical-align:middle;}
+
+/* ── modal form ── */
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.form-row.full{grid-template-columns:1fr;}
+.form-row.tri{grid-template-columns:1fr 1fr 1fr;}
+.form-group{display:flex;flex-direction:column;gap:4px;}
+.form-label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-title">
+  <span class="material-icons" style="color:var(--primary);">directions_car</span>車輛管理
+  <span style="font-size:14px;font-weight:400;color:var(--muted);margin-left:4px;" id="veh-count"></span>
+</div>
+
+<!-- filter bar -->
+<div class="filter-bar">
+  <div class="search-box" style="max-width:260px;">
+    <span class="material-icons">search</span>
+    <input type="text" id="search-input" placeholder="車牌 / 廠牌 / 型號…" oninput="renderTable()">
+  </div>
+  <select class="select-box" id="fleet-filter" onchange="renderTable()">
+    <option value="">全部車行</option>
+  </select>
+  <select class="select-box" id="status-filter" onchange="renderTable()">
+    <option value="">全部狀態</option>
+    <option value="active">服役中</option>
+    <option value="maintenance">保養中</option>
+    <option value="retired">報廢</option>
+  </select>
+  <label style="font-size:13px;color:var(--muted);display:flex;align-items:center;gap:5px;cursor:pointer;">
+    <input type="checkbox" id="wc-filter" onchange="renderTable()"> 輪椅車輛
+  </label>
+  <button class="btn btn-primary" style="margin-left:auto;" onclick="openAddVehicle()">
+    <span class="material-icons" style="font-size:15px;">add</span>新增車輛
+  </button>
+</div>
+
+<!-- table -->
+<div class="data-card">
+  <div class="tbl-wrap">
+    <table id="veh-table">
+      <thead>
+        <tr>
+          <th>車牌號碼</th>
+          <th>廠牌 / 型號</th>
+          <th>年份</th>
+          <th>座位</th>
+          <th>輪椅</th>
+          <th>車行</th>
+          <th>常用司機</th>
+          <th>狀態</th>
+          <th>行照到期</th>
+          <th>保險到期</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="veh-tbody">
+        <tr><td colspan="11" class="empty"><span class="material-icons">hourglass_empty</span>載入中…</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="tbl-footer">
+    <span id="veh-footer-count">-</span>
+    <span style="color:var(--muted);">最後更新：<span id="last-updated">-</span></span>
+  </div>
+</div>
+
+<!-- ═══════════════════ ADD / EDIT MODAL ═══════════════════ -->
+<div id="veh-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:300;align-items:center;justify-content:center;" onclick="closeVehicleModal(event)">
+  <div style="background:var(--card);border-radius:12px;width:680px;max-width:95vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);">
+    <div style="display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid var(--border);flex-shrink:0;">
+      <span class="material-icons" style="color:var(--primary);">directions_car</span>
+      <div style="font-weight:700;font-size:15px;flex:1;" id="veh-modal-title">新增車輛</div>
+      <button style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:20px;" onclick="closeVehicleModal()">✕</button>
+    </div>
+    <div style="padding:20px;overflow-y:auto;flex:1;">
+      <form id="veh-form" onsubmit="saveVehicle(event)">
+        <input type="hidden" id="vf-id">
+
+        <div class="form-row" style="margin-bottom:14px;">
+          <div class="form-group">
+            <label class="form-label">車牌號碼 *</label>
+            <input class="fi" id="vf-plate" placeholder="例：ABC-1234" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">所屬車行</label>
+            <select class="fi" id="vf-fleet">
+              <option value="">— 未指定 —</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row tri" style="margin-bottom:14px;">
+          <div class="form-group">
+            <label class="form-label">廠牌</label>
+            <input class="fi" id="vf-brand" placeholder="Toyota / Ford…">
+          </div>
+          <div class="form-group">
+            <label class="form-label">型號</label>
+            <input class="fi" id="vf-model" placeholder="Hiace / Transit…">
+          </div>
+          <div class="form-group">
+            <label class="form-label">出廠年份</label>
+            <input class="fi" id="vf-year" type="number" placeholder="2020" min="1990" max="2099">
+          </div>
+        </div>
+
+        <div class="form-row tri" style="margin-bottom:14px;">
+          <div class="form-group">
+            <label class="form-label">顏色</label>
+            <input class="fi" id="vf-color" placeholder="白色…">
+          </div>
+          <div class="form-group">
+            <label class="form-label">核定座位數</label>
+            <input class="fi" id="vf-seats" type="number" placeholder="7" min="1" max="99">
+          </div>
+          <div class="form-group">
+            <label class="form-label">狀態</label>
+            <select class="fi" id="vf-status">
+              <option value="active">服役中</option>
+              <option value="maintenance">保養中</option>
+              <option value="retired">報廢</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row" style="margin-bottom:14px;">
+          <div class="form-group">
+            <label class="form-label">行照到期日</label>
+            <input class="fi" id="vf-license-expiry" type="date">
+          </div>
+          <div class="form-group">
+            <label class="form-label">保險到期日</label>
+            <input class="fi" id="vf-insurance-expiry" type="date">
+          </div>
+        </div>
+
+        <div class="form-row full" style="margin-bottom:14px;">
+          <div class="form-group" style="flex-direction:row;align-items:center;gap:10px;">
+            <input type="checkbox" id="vf-wheelchair" style="width:16px;height:16px;cursor:pointer;">
+            <label for="vf-wheelchair" style="font-size:13px;cursor:pointer;">具備輪椅空間（無障礙車輛）</label>
+          </div>
+        </div>
+
+        <div class="form-row full" style="margin-bottom:6px;">
+          <div class="form-group">
+            <label class="form-label">備註</label>
+            <textarea class="fi" id="vf-notes" rows="3" style="resize:vertical;" placeholder="其他說明…"></textarea>
+          </div>
+        </div>
+      </form>
+    </div>
+    <div style="padding:14px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;flex-shrink:0;">
+      <button class="btn btn-ghost" onclick="closeVehicleModal()">取消</button>
+      <button class="btn btn-danger" id="veh-del-btn" style="display:none;margin-right:auto;" onclick="deleteVehicle()">
+        <span class="material-icons" style="font-size:14px;">delete</span>刪除
+      </button>
+      <button class="btn btn-primary" onclick="saveVehicle(event)">
+        <span class="material-icons" style="font-size:14px;">save</span>儲存
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+let _vehicles = [];
+let _fleets   = [];
+let _editId   = null;
+
+const STATUS_LABEL = {active:'服役中', maintenance:'保養中', retired:'報廢'};
+const STATUS_CLS   = {active:'status-active', maintenance:'status-maintenance', retired:'status-retired'};
+
+// ── init ─────────────────────────────────────────────────────────────────────
+(async function init(){
+  await Promise.all([loadFleets(), loadVehicles()]);
+  document.getElementById('last-updated').textContent = new Date().toLocaleTimeString('zh-TW');
+})();
+
+async function loadFleets(){
+  try {
+    const r = await fetch('/api/v2/fleets');
+    const data = await r.json();
+    _fleets = Array.isArray(data) ? data : (data.fleets || []);
+    // populate filter dropdown
+    const sel = document.getElementById('fleet-filter');
+    sel.innerHTML = '<option value="">全部車行</option>';
+    _fleets.forEach(f => {
+      sel.innerHTML += `<option value="${f.id}">${esc(f.name)}</option>`;
+    });
+    // populate modal dropdown
+    fillFleetSelect('vf-fleet');
+  } catch(e){ console.error(e); }
+}
+
+function fillFleetSelect(id){
+  const sel = document.getElementById(id);
+  sel.innerHTML = '<option value="">— 未指定 —</option>';
+  _fleets.forEach(f => {
+    sel.innerHTML += `<option value="${f.id}">${esc(f.name)}</option>`;
+  });
+}
+
+async function loadVehicles(){
+  try {
+    const r = await fetch('/api/v2/vehicles');
+    const vdata = await r.json();
+    _vehicles = Array.isArray(vdata) ? vdata : (vdata.vehicles || []);
+    renderTable();
+  } catch(e){ console.error(e); toast('載入車輛失敗','err'); }
+}
+
+// ── render ────────────────────────────────────────────────────────────────────
+function renderTable(){
+  const q       = (document.getElementById('search-input').value||'').toLowerCase();
+  const fleetId = document.getElementById('fleet-filter').value;
+  const status  = document.getElementById('status-filter').value;
+  const wcOnly  = document.getElementById('wc-filter').checked;
+
+  const filtered = _vehicles.filter(v => {
+    if(fleetId && String(v.fleet_id) !== fleetId) return false;
+    if(status  && v.status !== status)             return false;
+    if(wcOnly  && !v.wheelchair)                   return false;
+    if(q){
+      const hay = [v.plate_no, v.brand, v.model, v.fleet_name, v.current_driver_name].join(' ').toLowerCase();
+      if(!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  document.getElementById('veh-count').textContent = `(${_vehicles.length} 輛)`;
+  document.getElementById('veh-footer-count').textContent = `顯示 ${filtered.length} / ${_vehicles.length} 筆`;
+
+  const tbody = document.getElementById('veh-tbody');
+  if(!filtered.length){
+    tbody.innerHTML = `<tr><td colspan="11" class="empty"><span class="material-icons">directions_car</span><br>沒有符合的車輛</td></tr>`;
+    return;
+  }
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  const soon  = new Date(today); soon.setDate(today.getDate()+30);
+
+  tbody.innerHTML = filtered.map(v => {
+    const licCls = expiryClass(v.license_expiry, today, soon);
+    const insCls = expiryClass(v.insurance_expiry, today, soon);
+    return `<tr onclick="openEditVehicle(${v.id})">
+      <td class="plate-cell">${esc(v.plate_no)}</td>
+      <td>${esc(v.brand||'')} ${esc(v.model||'')}</td>
+      <td>${v.year||''}</td>
+      <td>${v.seats||''}</td>
+      <td style="text-align:center;">${v.wheelchair?'<span class="material-icons wc-icon" title="輪椅空間">accessible</span>':'—'}</td>
+      <td>${esc(v.fleet_name||'—')}</td>
+      <td>${esc(v.current_driver_name||'—')}</td>
+      <td><span class="badge ${STATUS_CLS[v.status]||'bg-gray'}">${STATUS_LABEL[v.status]||v.status}</span></td>
+      <td class="${licCls}">${fmtDate(v.license_expiry)}</td>
+      <td class="${insCls}">${fmtDate(v.insurance_expiry)}</td>
+      <td onclick="event.stopPropagation()">
+        <button class="btn btn-ghost" style="padding:4px 8px;font-size:12px;" onclick="openEditVehicle(${v.id})">
+          <span class="material-icons" style="font-size:13px;">edit</span>編輯
+        </button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function expiryClass(dateStr, today, soon){
+  if(!dateStr) return '';
+  const d = new Date(dateStr); d.setHours(0,0,0,0);
+  if(d < today)  return 'expiry-expired';
+  if(d <= soon)  return 'expiry-warn';
+  return '';
+}
+
+function fmtDate(s){
+  if(!s) return '—';
+  return s.slice(0,10);
+}
+
+// ── open modal ────────────────────────────────────────────────────────────────
+function openAddVehicle(){
+  _editId = null;
+  document.getElementById('veh-modal-title').textContent = '新增車輛';
+  document.getElementById('veh-del-btn').style.display = 'none';
+  document.getElementById('veh-form').reset();
+  document.getElementById('vf-id').value = '';
+  fillFleetSelect('vf-fleet');
+  document.getElementById('veh-overlay').style.display = 'flex';
+}
+
+function openEditVehicle(id){
+  const v = _vehicles.find(x => x.id === id);
+  if(!v) return;
+  _editId = id;
+  document.getElementById('veh-modal-title').textContent = `編輯車輛 — ${v.plate_no}`;
+  document.getElementById('veh-del-btn').style.display = 'inline-flex';
+  document.getElementById('vf-id').value    = v.id;
+  fillFleetSelect('vf-fleet');
+  document.getElementById('vf-plate').value   = v.plate_no || '';
+  setSelect('vf-fleet', v.fleet_id);
+  document.getElementById('vf-brand').value   = v.brand || '';
+  document.getElementById('vf-model').value   = v.model || '';
+  document.getElementById('vf-year').value    = v.year  || '';
+  document.getElementById('vf-color').value   = v.color || '';
+  document.getElementById('vf-seats').value   = v.seats || '';
+  setSelect('vf-status', v.status || 'active');
+  document.getElementById('vf-license-expiry').value   = (v.license_expiry   ||'').slice(0,10);
+  document.getElementById('vf-insurance-expiry').value = (v.insurance_expiry ||'').slice(0,10);
+  document.getElementById('vf-wheelchair').checked = !!v.wheelchair;
+  document.getElementById('vf-notes').value   = v.notes || '';
+  document.getElementById('veh-overlay').style.display = 'flex';
+}
+
+function setSelect(id, val){
+  const el = document.getElementById(id);
+  el.value = val != null ? String(val) : '';
+}
+
+function closeVehicleModal(e){
+  if(e && e.target !== document.getElementById('veh-overlay')) return;
+  document.getElementById('veh-overlay').style.display = 'none';
+}
+
+// ── save ──────────────────────────────────────────────────────────────────────
+async function saveVehicle(e){
+  if(e) e.preventDefault();
+  const plate = document.getElementById('vf-plate').value.trim();
+  if(!plate){ toast('請填寫車牌號碼','err'); return; }
+
+  const payload = {
+    plate_no:         plate,
+    fleet_id:         document.getElementById('vf-fleet').value || null,
+    brand:            document.getElementById('vf-brand').value.trim()||null,
+    model:            document.getElementById('vf-model').value.trim()||null,
+    year:             document.getElementById('vf-year').value  || null,
+    color:            document.getElementById('vf-color').value.trim()||null,
+    seats:            document.getElementById('vf-seats').value || null,
+    status:           document.getElementById('vf-status').value,
+    license_expiry:   document.getElementById('vf-license-expiry').value   || null,
+    insurance_expiry: document.getElementById('vf-insurance-expiry').value || null,
+    wheelchair:       document.getElementById('vf-wheelchair').checked,
+    notes:            document.getElementById('vf-notes').value.trim()||null,
+  };
+  if(_editId) payload.id = _editId;
+
+  try {
+    const url    = _editId ? `/api/v2/vehicles/${_editId}` : '/api/v2/vehicles';
+    const method = _editId ? 'PUT' : 'POST';
+    const r = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.error||'儲存失敗');
+    toast(_editId ? '已更新車輛' : '已新增車輛', 'ok');
+    document.getElementById('veh-overlay').style.display = 'none';
+    await loadVehicles();
+  } catch(err){ toast(err.message,'err'); }
+}
+
+// ── delete ────────────────────────────────────────────────────────────────────
+async function deleteVehicle(){
+  if(!_editId) return;
+  const v = _vehicles.find(x => x.id === _editId);
+  if(!confirm(`確定要刪除車輛「${v ? v.plate_no : _editId}」？`)) return;
+  try {
+    const r = await fetch(`/api/v2/vehicles/${_editId}`, {method:'DELETE'});
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.error||'刪除失敗');
+    toast('已刪除車輛','ok');
+    document.getElementById('veh-overlay').style.display = 'none';
+    await loadVehicles();
+  } catch(err){ toast(err.message,'err'); }
+}
+
+function esc(s){
+  if(s==null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+{% endblock %}
